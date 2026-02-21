@@ -23,13 +23,14 @@ class TranslatorCog(commands.Cog):
         self.bot = bot
 
     @commands.Cog.listener()
-    async def on_reaction_add(self, reaction: discord.Reaction, user: discord.Member | discord.User):
-        """リアクション追加時のイベントハンドラ。"""
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        """リアクション追加時のイベントハンドラ（キャッシュにない古いメッセージにも対応）。"""
 
-        if user.bot:
+        # ボット自身のリアクションは無視
+        if payload.user_id == self.bot.user.id:
             return
 
-        emoji = str(reaction.emoji)
+        emoji = str(payload.emoji)
 
         if not is_flag_emoji(emoji):
             return
@@ -38,9 +39,34 @@ class TranslatorCog(commands.Cog):
         if lang_info is None:
             return
 
-        message: discord.Message = reaction.message
+        # チャンネルの取得
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(payload.channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return
 
+        # メッセージの取得
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            logger.error("メッセージの取得に失敗: message_id=%s", payload.message_id)
+            return
+
+        # ボットへのメッセージへのリアクションは無視
         if message.author == self.bot.user:
+            return
+
+        # ユーザー情報の取得（member が None の場合は fetch する）
+        user = payload.member
+        if user is None:
+            try:
+                user = await self.bot.fetch_user(payload.user_id)
+            except discord.HTTPException:
+                return
+
+        if user.bot:
             return
 
         content = message.content.strip()
