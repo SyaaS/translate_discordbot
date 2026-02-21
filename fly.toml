@@ -9,8 +9,12 @@ primary_region = 'nrt'
 [build]
   dockerfile = 'Dockerfile'
 
+# Discord Bot は 1台で十分なため、高可用性による 2台起動を抑制します。
+# 既に 2台起動している場合は `fly scale count 1` を実行してください。
+[deploy]
+  min_machines_running = 0
+
 # [[services]] ブロックは不要なため削除しました。
-# Discord Bot は外部からの HTTP リクエストを待ち受けないため、ポートの設定は不要です。
 
 [[vm]]
   memory = '1gb'

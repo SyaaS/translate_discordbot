@@ -102,12 +102,20 @@ fly launch
 ※ `fly.toml` が作成されます。既存のものを使う場合は `fly deploy` を実行してください。
 
 ### 3. シークレット（環境変数）の設定
-`.env` の内容を Fly.io に登録します。**GitHub にプッシュしない機密情報です。**
+`.env` の内容を Fly.io に登録します。機密情報のため、一括設定スクリプトを使用すると便利です。
 ```bash
-fly secrets set DISCORD_TOKEN="your_token" DEEPL_API_KEY="your_key"
+chmod +x set_fly_secrets.sh
+./set_fly_secrets.sh
+```
+※ 手動で設定する場合は `fly secrets set DISCORD_TOKEN="..."` を実行してください。
+
+### 4. マシン数の調整（1台にする）
+Fly.io はデフォルトで 2台（高可用性）起動しますが、個人用ボットであれば 1台で十分です。
+```bash
+fly scale count 1
 ```
 
-### 4. デプロイの実行
+### 5. デプロイの実行
 ```bash
 fly deploy
 ```
