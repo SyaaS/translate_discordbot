@@ -1,5 +1,5 @@
 """
-TranslatorCog: 国旗リアクション → 翻訳 → スレッド投稿
+TranslatorCog: 国旗リアクション → 翻訳 → スレッド投稿 → スレッドクローズ
 """
 
 import logging
@@ -12,10 +12,7 @@ from utils.translator import translate
 
 logger = logging.getLogger(__name__)
 
-# スレッド名のプレフィックス（翻訳スレッドであることを識別するため）
 TRANSLATION_THREAD_PREFIX = "💬 Translations"
-
-# ボットが投稿した翻訳メッセージの識別マーカー
 TRANSLATION_MARKER = "Translation (via"
 
 
@@ -29,39 +26,43 @@ class TranslatorCog(commands.Cog):
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.Member | discord.User):
         """リアクション追加時のイベントハンドラ。"""
 
-        # ボット自身のリアクションは無視
         if user.bot:
             return
 
         emoji = str(reaction.emoji)
 
-        # 国旗絵文字でない場合は無視
         if not is_flag_emoji(emoji):
             return
 
-        # 未対応の国旗の場合は無視
         lang_info = FLAG_TO_LANG.get(emoji)
         if lang_info is None:
             return
 
         message: discord.Message = reaction.message
 
-        # ボット自身のメッセージは翻訳しない
         if message.author == self.bot.user:
             return
 
-        # テキストが空のメッセージ（画像のみ等）はスキップ
         content = message.content.strip()
         if not content:
             logger.debug("テキストが空のため翻訳スキップ: message_id=%s", message.id)
             return
 
-        deepl_lang = lang_info["deepl"]
-        google_lang = lang_info["google"]
-        lang_label = lang_info["label"]
+        deepl_lang    = lang_info["deepl"]      # None = DeepL非対応
+        mymemory_lang = lang_info["mymemory"]
+        lang_label    = lang_info["label"]
+
+        # --- 翻訳実行（スレッド作成前に行い、同言語ならスキップ） ---
+        logger.info("翻訳開始: emoji=%s lang=%s message_id=%s", emoji, lang_label, message.id)
+        translated_text, engine = translate(content, deepl_lang, mymemory_lang)
+
+        # ソース言語とターゲット言語が同じ場合は何もしない
+        if engine == "same_language":
+            logger.info("同言語のため翻訳スキップ: lang=%s message_id=%s", lang_label, message.id)
+            return
 
         # --- スレッドの取得または作成 ---
-        thread = await self._get_or_create_thread(message)
+        thread, was_archived = await self._get_or_create_thread(message)
         if thread is None:
             logger.error("スレッドの取得・作成に失敗: message_id=%s", message.id)
             return
@@ -69,64 +70,88 @@ class TranslatorCog(commands.Cog):
         # --- 重複チェック ---
         if await self._already_translated(thread, lang_label):
             logger.debug("翻訳済みのためスキップ: lang=%s, message_id=%s", lang_label, message.id)
+            # アーカイブを元に戻す（元々閉じていた場合）
+            if was_archived:
+                await self._archive_thread(thread)
             return
-
-        # --- 翻訳実行 ---
-        logger.info("翻訳開始: emoji=%s lang=%s message_id=%s", emoji, lang_label, message.id)
-        translated_text, engine = translate(content, deepl_lang, google_lang)
 
         if translated_text is None:
             logger.error("翻訳失敗: message_id=%s", message.id)
-            await thread.send(f"{emoji} **{lang_label} Translation failed.** (すべての翻訳エンジンが利用できませんでした)")
-            return
+            await thread.send(
+                f"{emoji} **{lang_label} Translation failed.**\n"
+                "（すべての翻訳エンジンが利用できませんでした）"
+            )
+        else:
+            post = (
+                f"{emoji} **{lang_label} Translation (via {engine}):**\n"
+                f"{translated_text}"
+            )
+            await thread.send(post)
+            logger.info("翻訳投稿完了: engine=%s lang=%s message_id=%s", engine, lang_label, message.id)
 
-        # --- スレッドに投稿 ---
-        post = (
-            f"{emoji} **{lang_label} Translation (via {engine}):**\n"
-            f"{translated_text}"
-        )
-        await thread.send(post)
-        logger.info("翻訳投稿完了: engine=%s lang=%s message_id=%s", engine, lang_label, message.id)
+        # --- スレッドをクローズ（アーカイブ）---
+        await self._archive_thread(thread)
 
-    async def _get_or_create_thread(self, message: discord.Message) -> discord.Thread | None:
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _get_or_create_thread(
+        self, message: discord.Message
+    ) -> tuple[discord.Thread | None, bool]:
         """
         メッセージに紐付くスレッドを返す。
-        既存スレッドがあればそれを、なければ新規作成する。
+        既存スレッドがあればそれを（アーカイブ済みなら解除して）、
+        なければ新規作成する。
+
+        Returns:
+            (thread, was_archived)
+            was_archived: 元々アーカイブ済みだったかどうか
         """
-        # チャンネルがスレッドをサポートしているか確認
         if not isinstance(message.channel, (discord.TextChannel, discord.Thread)):
-            return None
+            return None, False
 
-        # 既にスレッドの中のメッセージの場合はそのスレッドをそのまま使う
+        # 既にスレッド内のメッセージの場合はそのスレッドを使う
         if isinstance(message.channel, discord.Thread):
-            return message.channel
+            return message.channel, False
 
-        # メッセージに紐付くスレッドを探す
+        # メッセージに紐付く既存スレッドを探す
         try:
-            # fetch_message でスレッドが添付されているか確認
             fetched = await message.channel.fetch_message(message.id)
             if fetched.thread:
-                return fetched.thread
+                thread = fetched.thread
+                was_archived = thread.archived
+                if was_archived:
+                    # アーカイブされていた場合は一時的に開く
+                    try:
+                        await thread.edit(archived=False)
+                    except (discord.Forbidden, discord.HTTPException) as e:
+                        logger.warning("スレッドのアーカイブ解除失敗: %s", e)
+                return thread, was_archived
         except discord.NotFound:
-            return None
+            return None, False
 
         # スレッドがない場合は新規作成
         try:
             thread = await message.create_thread(name=TRANSLATION_THREAD_PREFIX)
-            return thread
+            return thread, False
         except discord.Forbidden:
-            logger.error(
-                "スレッド作成権限がありません: channel=%s", message.channel.id
-            )
-            return None
+            logger.error("スレッド作成権限がありません: channel=%s", message.channel.id)
+            return None, False
         except discord.HTTPException as e:
             logger.error("スレッド作成失敗: %s", e)
-            return None
+            return None, False
+
+    async def _archive_thread(self, thread: discord.Thread) -> None:
+        """スレッドをアーカイブ（クローズ）する。"""
+        try:
+            await thread.edit(archived=True)
+            logger.info("スレッドをクローズしました: thread_id=%s", thread.id)
+        except discord.Forbidden:
+            logger.warning("スレッドのアーカイブ権限がありません: thread_id=%s", thread.id)
+        except discord.HTTPException as e:
+            logger.warning("スレッドのアーカイブ失敗: %s", e)
 
     async def _already_translated(self, thread: discord.Thread, lang_label: str) -> bool:
-        """
-        同じ言語への翻訳が既にスレッドに投稿されているか確認する。
-        """
+        """同じ言語への翻訳が既にスレッドに投稿されているか確認する。"""
         marker = f"**{lang_label} {TRANSLATION_MARKER}"
         try:
             async for msg in thread.history(limit=50):
