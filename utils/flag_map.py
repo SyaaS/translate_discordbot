@@ -10,38 +10,44 @@ FLAG_TO_LANG: dict[str, dict] = {
     # アジア
     "🇯🇵": {"deepl": "JA",    "mymemory": "ja",    "label": "Japanese"},
     "🇨🇳": {"deepl": "ZH",    "mymemory": "zh-CN", "label": "Chinese (Simplified)"},
+    "🇭🇰": {"deepl": "ZH",    "mymemory": "zh-TW", "label": "Chinese (Traditional)"},
     "🇹🇼": {"deepl": "ZH",    "mymemory": "zh-TW", "label": "Chinese (Traditional)"},
+    "🇲🇴": {"deepl": "ZH",    "mymemory": "zh-TW", "label": "Chinese (Traditional)"},
     "🇰🇷": {"deepl": "KO",    "mymemory": "ko",    "label": "Korean"},
     "🇻🇳": {"deepl": "VI",    "mymemory": "vi",    "label": "Vietnamese"},
     "🇹🇭": {"deepl": "TH",    "mymemory": "th",    "label": "Thai"},
     "🇮🇩": {"deepl": "ID",    "mymemory": "id",    "label": "Indonesian"},
     "🇲🇾": {"deepl": "MS",    "mymemory": "ms",    "label": "Malay"},
-    "🇵🇭": {"deepl": None,    "mymemory": "tl",    "label": "Filipino"},   # DeepL 非対応
+    "🇸🇬": {"deepl": "EN-US", "mymemory": "en",    "label": "English (Singapore)"},
+    "🇵🇭": {"deepl": None,    "mymemory": "tl",    "label": "Filipino"},
     "🇮🇳": {"deepl": "HI",    "mymemory": "hi",    "label": "Hindi"},
     "🇧🇩": {"deepl": "BN",    "mymemory": "bn",    "label": "Bengali"},
     "🇵🇰": {"deepl": "UR",    "mymemory": "ur",    "label": "Urdu"},
-    "🇦🇿": {"deepl": "AZ",    "mymemory": "az",    "label": "Azerbaijani"},
-    "🇰🇿": {"deepl": "KK",    "mymemory": "kk",    "label": "Kazakh"},
-    "🇬🇪": {"deepl": "KA",    "mymemory": "ka",    "label": "Georgian"},
-    "🇦🇲": {"deepl": "HY",    "mymemory": "hy",    "label": "Armenian"},
 
     # 中東
     "🇸🇦": {"deepl": "AR",    "mymemory": "ar",    "label": "Arabic"},
     "🇦🇪": {"deepl": "AR",    "mymemory": "ar",    "label": "Arabic"},
+    "🇶🇦": {"deepl": "AR",    "mymemory": "ar",    "label": "Arabic"},
     "🇮🇱": {"deepl": "HE",    "mymemory": "he",    "label": "Hebrew"},
     "🇮🇷": {"deepl": "FA",    "mymemory": "fa",    "label": "Persian"},
     "🇹🇷": {"deepl": "TR",    "mymemory": "tr",    "label": "Turkish"},
 
     # ヨーロッパ
     "🇺🇸": {"deepl": "EN-US", "mymemory": "en",    "label": "English (US)"},
+    "🇺🇲": {"deepl": "EN-US", "mymemory": "en",    "label": "English (US) - UM"},
     "🇬🇧": {"deepl": "EN-GB", "mymemory": "en",    "label": "English (UK)"},
+    "🇮🇪": {"deepl": "EN-GB", "mymemory": "en",    "label": "English (Ireland)"},
     "🇫🇷": {"deepl": "FR",    "mymemory": "fr",    "label": "French"},
+    "🇲🇨": {"deepl": "FR",    "mymemory": "fr",    "label": "French (Monaco)"},
     "🇩🇪": {"deepl": "DE",    "mymemory": "de",    "label": "German"},
+    "🇦🇹": {"deepl": "DE",    "mymemory": "de",    "label": "German (Austria)"},
+    "🇨🇭": {"deepl": "DE",    "mymemory": "de",    "label": "German (Swiss)"},
     "🇪🇸": {"deepl": "ES",    "mymemory": "es",    "label": "Spanish"},
     "🇵🇹": {"deepl": "PT-PT", "mymemory": "pt",    "label": "Portuguese (Portugal)"},
     "🇧🇷": {"deepl": "PT-BR", "mymemory": "pt",    "label": "Portuguese (Brazil)"},
     "🇮🇹": {"deepl": "IT",    "mymemory": "it",    "label": "Italian"},
     "🇳🇱": {"deepl": "NL",    "mymemory": "nl",    "label": "Dutch"},
+    "🇧🇪": {"deepl": "NL",    "mymemory": "nl",    "label": "Dutch (Belgium)"},
     "🇵🇱": {"deepl": "PL",    "mymemory": "pl",    "label": "Polish"},
     "🇷🇺": {"deepl": "RU",    "mymemory": "ru",    "label": "Russian"},
     "🇺🇦": {"deepl": "UK",    "mymemory": "uk",    "label": "Ukrainian"},
@@ -52,24 +58,19 @@ FLAG_TO_LANG: dict[str, dict] = {
     "🇨🇿": {"deepl": "CS",    "mymemory": "cs",    "label": "Czech"},
     "🇸🇰": {"deepl": "SK",    "mymemory": "sk",    "label": "Slovak"},
     "🇭🇺": {"deepl": "HU",    "mymemory": "hu",    "label": "Hungarian"},
-    "🇷🇴": {"deepl": "RO",    "mymemory": "ro",    "label": "Romanian"},
-    "🇧🇬": {"deepl": "BG",    "mymemory": "bg",    "label": "Bulgarian"},
     "🇬🇷": {"deepl": "EL",    "mymemory": "el",    "label": "Greek"},
-    "🇭🇷": {"deepl": "HR",    "mymemory": "hr",    "label": "Croatian"},
-    "🇷🇸": {"deepl": "SR",    "mymemory": "sr",    "label": "Serbian"},
-    "🇸🇮": {"deepl": "SL",    "mymemory": "sl",    "label": "Slovenian"},
-    "🇱🇹": {"deepl": "LT",    "mymemory": "lt",    "label": "Lithuanian"},
-    "🇱🇻": {"deepl": "LV",    "mymemory": "lv",    "label": "Latvian"},
-    "🇪🇪": {"deepl": "ET",    "mymemory": "et",    "label": "Estonian"},
 
     # アフリカ
-    "🇿🇦": {"deepl": None,    "mymemory": "af",    "label": "Afrikaans"},   # DeepL 非対応
-    "🇳🇬": {"deepl": None,    "mymemory": "yo",    "label": "Yoruba"},      # DeepL 非対応
-    "🇰🇪": {"deepl": None,    "mymemory": "sw",    "label": "Swahili"},     # DeepL 非対応
+    "🇿🇦": {"deepl": None,    "mymemory": "af",    "label": "Afrikaans"},
+    "🇳🇬": {"deepl": None,    "mymemory": "yo",    "label": "Yoruba"},
+    "🇰🇪": {"deepl": None,    "mymemory": "sw",    "label": "Swahili"},
 
     # アメリカ大陸
     "🇲🇽": {"deepl": "ES",    "mymemory": "es",    "label": "Spanish (Mexico)"},
     "🇦🇷": {"deepl": "ES",    "mymemory": "es",    "label": "Spanish (Argentina)"},
+    "🇨🇱": {"deepl": "ES",    "mymemory": "es",    "label": "Spanish (Chile)"},
+    "🇨🇴": {"deepl": "ES",    "mymemory": "es",    "label": "Spanish (Colombia)"},
+    "🇵🇪": {"deepl": "ES",    "mymemory": "es",    "label": "Spanish (Peru)"},
     "🇨🇦": {"deepl": "EN-US", "mymemory": "en",    "label": "English (Canada)"},
 
     # オセアニア
