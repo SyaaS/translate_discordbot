@@ -1,17 +1,18 @@
-# fly.toml app configuration file generated for translate-discordbot
+# fly.toml app configuration file generated for translate-discordbot on 2026-02-22T07:14:39+09:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "translate-discordbot"
-primary_region = "nrt"
+app = 'translate-discordbot'
+primary_region = 'nrt'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
-[env]
-  # ここには公開可能な非機密の環境変数を記述します
-  # 機密情報は `fly secrets set KEY=VALUE` で設定してください
+# [[services]] ブロックは不要なため削除しました。
+# Discord Bot は外部からの HTTP リクエストを待ち受けないため、ポートの設定は不要です。
 
-[[services]]
-  # Discord Bot は HTTP サーバーではないため、外部公開ポートの設定は通常不要です
-  # もし将来的にダッシュボードなどを追加する場合はここを設定します
-  internal_port = 8080
-  protocol = "tcp"
+[[vm]]
+  memory = '1gb'
+  cpus = 1
+  memory_mb = 1024
