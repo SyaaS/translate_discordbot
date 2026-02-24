@@ -9,10 +9,10 @@ label:     人が読める言語名。
 FLAG_TO_LANG: dict[str, dict] = {
     # アジア
     "🇯🇵": {"deepl": "JA",    "mymemory": "ja",    "label": "Japanese"},
-    "🇨🇳": {"deepl": "ZH",    "mymemory": "zh-CN", "label": "Chinese (Simplified)"},
-    "🇭🇰": {"deepl": "ZH",    "mymemory": "zh-TW", "label": "Chinese (Traditional)"},
-    "🇹🇼": {"deepl": "ZH",    "mymemory": "zh-TW", "label": "Chinese (Traditional)"},
-    "🇲🇴": {"deepl": "ZH",    "mymemory": "zh-TW", "label": "Chinese (Traditional)"},
+    "🇨🇳": {"deepl": "ZH-HANS", "mymemory": "zh-CN", "label": "Chinese (Simplified)"},
+    "🇭🇰": {"deepl": "ZH-HANT", "mymemory": "zh-TW", "label": "Chinese (Traditional)"},
+    "🇹🇼": {"deepl": "ZH-HANT", "mymemory": "zh-TW", "label": "Chinese (Traditional)"},
+    "🇲🇴": {"deepl": "ZH-HANT", "mymemory": "zh-TW", "label": "Chinese (Traditional)"},
     "🇰🇷": {"deepl": "KO",    "mymemory": "ko",    "label": "Korean"},
     "🇻🇳": {"deepl": "VI",    "mymemory": "vi",    "label": "Vietnamese"},
     "🇹🇭": {"deepl": "TH",    "mymemory": "th",    "label": "Thai"},
