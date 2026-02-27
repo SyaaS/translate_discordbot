@@ -64,12 +64,17 @@ MYMEMORY_EMAIL=your_email@example.com      # オプション
 
 ```text
 .
-├── main.py              # ボット起動エントリポイント
+├── main.py              # ボット起動エントリポイント（ヘルスチェックサーバー含む）
 ├── cogs/
 │   └── translator.py    # リアクション制御・スレッド管理ロジック
 ├── utils/
 │   ├── flag_map.py      # 絵文字と言語コードの定義
 │   └── translator.py    # 翻訳エンジン統合API (DeepL/MyMemory)
+├── Dockerfile           # Docker ビルド設定
+├── fly.toml             # Fly.io 設定
+├── deploy_cloudrun.sh   # GCP Cloud Run デプロイスクリプト
+├── set_fly_secrets.sh   # Fly.io シークレット登録スクリプト
+├── set_gcp_secrets.sh   # GCP Secret Manager 登録スクリプト
 └── requirements.txt     # Python依存パッケージ
 ```
 
@@ -122,5 +127,54 @@ fly deploy
 
 ---
 
+## デプロイ (GCP Cloud Run)
+
+GCP Cloud Run でもデプロイできます。Cloud Run の「Always-on CPU」モードを使い、Discord ボットを常時稼働させます。
+
+### 前提条件
+- [Google Cloud SDK (`gcloud`)](https://cloud.google.com/sdk/docs/install) がインストール・認証済み
+- Docker がインストール済み
+- GCP プロジェクトが作成済み
+
+### 1. GCP プロジェクトの初期設定
+```bash
+# ログインとプロジェクト設定
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+
+# 必要な API を有効化
+gcloud services enable \
+  run.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com
+```
+
+### 2. シークレットの登録
+`.env` の内容を GCP Secret Manager に登録します。
+```bash
+chmod +x set_gcp_secrets.sh
+./set_gcp_secrets.sh
+```
+
+### 3. デプロイの実行
+ビルド → プッシュ → デプロイをワンコマンドで実行します。
+```bash
+chmod +x deploy_cloudrun.sh
+./deploy_cloudrun.sh
+```
+
+> **NOTE**: デフォルトリージョンは `asia-northeast1`（東京）です。変更する場合は `./deploy_cloudrun.sh YOUR_PROJECT_ID us-central1` のように指定してください。
+
+### 4. ログの確認
+```bash
+gcloud run services logs read translate-discordbot --region=asia-northeast1
+```
+
+### コスト目安
+Cloud Run の Always-on CPU（1 vCPU / 512MB / 最小1台）でおおよそ **月額 $5〜10** 程度です。
+
+---
+
 ## 📄 ライセンス
 [MIT License](LICENSE)
+
