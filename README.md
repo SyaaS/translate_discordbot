@@ -133,37 +133,37 @@ GCP Cloud Run でもデプロイできます。Cloud Run の「Always-on CPU」�
 
 ### 前提条件
 - [Google Cloud SDK (`gcloud`)](https://cloud.google.com/sdk/docs/install) がインストール・認証済み
-- Docker がインストール済み
 - GCP プロジェクトが作成済み
 
 ### 1. GCP プロジェクトの初期設定
 ```bash
 # ログインとプロジェクト設定
 gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
+gcloud config set project eventrecordbotdiscord
 
 # 必要な API を有効化
 gcloud services enable \
   run.googleapis.com \
   artifactregistry.googleapis.com \
-  secretmanager.googleapis.com
+  secretmanager.googleapis.com \
+  cloudbuild.googleapis.com
 ```
 
 ### 2. シークレットの登録
 `.env` の内容を GCP Secret Manager に登録します。
 ```bash
 chmod +x set_gcp_secrets.sh
-./set_gcp_secrets.sh
+./set_gcp_secrets.sh --prefix translate_discordbot_
 ```
 
 ### 3. デプロイの実行
 ビルド → プッシュ → デプロイをワンコマンドで実行します。
 ```bash
 chmod +x deploy_cloudrun.sh
-./deploy_cloudrun.sh
+./deploy_cloudrun.sh --prefix translate_discordbot_
 ```
 
-> **NOTE**: デフォルトリージョンは `asia-northeast1`（東京）です。変更する場合は `./deploy_cloudrun.sh YOUR_PROJECT_ID us-central1` のように指定してください。
+> **NOTE**: デフォルトリージョンは `asia-northeast1`（東京）、Secretプレフィックスは `translate_discordbot_` です。`gcloud config set project` 済みなら `--prefix` だけで実行できます。変更する場合は `./deploy_cloudrun.sh --region us-central1 --prefix your_prefix_` のように指定してください。
 
 ### 4. ログの確認
 ```bash
