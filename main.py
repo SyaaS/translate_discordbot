@@ -69,6 +69,8 @@ async def main():
     async with bot:
         await bot.load_extension("cogs.translator")
         logger.info("コグ cogs.translator を読み込みました")
+        await bot.load_extension("cogs.emoji_manager")
+        logger.info("コグ cogs.emoji_manager を読み込みました")
         await bot.start(token)
 
 

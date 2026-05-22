@@ -1,5 +1,8 @@
 """
-TranslatorCog: 国旗リアクション → 翻訳 → スレッド投稿 → スレッドクローズ
+TranslatorCog: リアクション → 翻訳 → スレッド投稿 → スレッドクローズ
+
+国旗絵文字またはカスタム絵文字のリアクションをトリガーに翻訳する。
+対応する絵文字はギルド単位の設定（emoji_config）で管理される。
 """
 
 import logging
@@ -7,7 +10,7 @@ import logging
 import discord
 from discord.ext import commands
 
-from utils.flag_map import FLAG_TO_LANG, is_flag_emoji
+from utils.emoji_config import get_lang_info
 from utils.translator import translate
 
 logger = logging.getLogger(__name__)
@@ -17,7 +20,7 @@ TRANSLATION_MARKER = "Translation (via"
 
 
 class TranslatorCog(commands.Cog):
-    """国旗リアクションで翻訳するコグ。"""
+    """リアクションで翻訳するコグ（国旗・カスタム絵文字対応）。"""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -32,10 +35,12 @@ class TranslatorCog(commands.Cog):
 
         emoji = str(payload.emoji)
 
-        if not is_flag_emoji(emoji):
+        # DM（ギルド外）でのリアクションは無視
+        if payload.guild_id is None:
             return
 
-        lang_info = FLAG_TO_LANG.get(emoji)
+        # ギルド単位のマッピングから言語情報を取得
+        lang_info = get_lang_info(payload.guild_id, emoji)
         if lang_info is None:
             return
 

@@ -6,6 +6,9 @@ __pycache__/
 # 環境変数（秘密情報）
 .env
 
+# ギルド単位の絵文字マッピング設定（ランタイム生成）
+guild_emoji_config.json
+
 # pip の誤生成ファイル
 =*
 
