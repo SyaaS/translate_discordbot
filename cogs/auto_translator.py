@@ -1,11 +1,11 @@
 """
-AutoTranslatorCog: チャンネル間自動翻訳転送機能
+AutoTranslatorCog: チャンネル間自動翻訳転送機能（リアルタイム＆バックフィル対応）
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
-
 import logging
 import os
 from typing import Optional
@@ -53,6 +53,53 @@ class AutoTranslatorCog(commands.Cog):
         except Exception as e:
             logger.error("設定ファイルの保存に失敗しました: %s", e)
 
+    async def _send_translated_embed(
+        self,
+        message: discord.Message,
+        target_channel: discord.abc.Messageable,
+        deepl_lang: Optional[str],
+        mymemory_lang: str,
+        lang_label: str
+    ) -> bool:
+        """
+        メッセージを翻訳し、指定のターゲットチャンネルに Embed で送信する共通ヘルパー。
+        成功した場合 True、スキップ・失敗時 False を返す。
+        """
+        content = message.content.strip()
+        if not content:
+            return False
+
+        translated_text, engine = translate(content, deepl_lang, mymemory_lang)
+
+        # 同一言語または翻訳失敗時
+        if engine == "same_language" or not translated_text:
+            return False
+
+        embed = discord.Embed(
+            description=translated_text,
+            color=discord.Color.blue(),
+            timestamp=message.created_at
+        )
+        embed.set_author(
+            name=message.author.display_name,
+            icon_url=message.author.display_avatar.url
+        )
+        embed.set_footer(
+            text=f"Translated to {lang_label} via {engine} | Source: #{message.channel.name if hasattr(message.channel, 'name') else 'channel'}"
+        )
+        embed.add_field(
+            name="Original Message",
+            value=f"[Jump to Message]({message.jump_url})",
+            inline=False
+        )
+
+        try:
+            await target_channel.send(embed=embed)
+            return True
+        except (discord.Forbidden, discord.HTTPException) as e:
+            logger.error("自動翻訳メッセージ送信失敗: %s", e)
+            return False
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         """メッセージ投稿時に自動翻訳・転送を行うリスナー。"""
@@ -70,10 +117,6 @@ class AutoTranslatorCog(commands.Cog):
         if source_channel_id not in self.configs:
             return
 
-        content = message.content.strip()
-        if not content:
-            return
-
         pairs = self.configs[source_channel_id]
         for pair in pairs:
             target_channel_id = pair["target_channel_id"]
@@ -81,7 +124,6 @@ class AutoTranslatorCog(commands.Cog):
             mymemory_lang = pair.get("mymemory_lang")
             lang_label = pair.get("lang_label", "Unknown")
 
-            # ターゲットチャンネルの取得
             target_channel = self.bot.get_channel(target_channel_id)
             if target_channel is None:
                 try:
@@ -90,44 +132,13 @@ class AutoTranslatorCog(commands.Cog):
                     logger.error("ターゲットチャンネル (%s) の取得失敗: %s", target_channel_id, e)
                     continue
 
-            # 翻訳実行
-            translated_text, engine = translate(content, deepl_lang, mymemory_lang)
-
-            # 同一言語の場合はスキップ
-            if engine == "same_language" or not translated_text:
-                logger.debug(
-                    "自動翻訳スキップ (engine=%s): source=%s target=%s",
-                    engine, source_channel_id, target_channel_id
-                )
-                continue
-
-            # Embed メッセージ作成
-            embed = discord.Embed(
-                description=translated_text,
-                color=discord.Color.blue(),
-                timestamp=message.created_at
+            await self._send_translated_embed(
+                message=message,
+                target_channel=target_channel,
+                deepl_lang=deepl_lang,
+                mymemory_lang=mymemory_lang,
+                lang_label=lang_label
             )
-            embed.set_author(
-                name=message.author.display_name,
-                icon_url=message.author.display_avatar.url
-            )
-            embed.set_footer(
-                text=f"Translated to {lang_label} via {engine} | Source: #{message.channel.name if hasattr(message.channel, 'name') else 'channel'}"
-            )
-            embed.add_field(
-                name="Original Message",
-                value=f"[Jump to Message]({message.jump_url})",
-                inline=False
-            )
-
-            try:
-                await target_channel.send(embed=embed)
-                logger.info(
-                    "自動翻訳転送完了: message_id=%s -> target_channel=%s (%s)",
-                    message.id, target_channel_id, lang_label
-                )
-            except (discord.Forbidden, discord.HTTPException) as e:
-                logger.error("自動翻訳メッセージ送信失敗 (target=%s): %s", target_channel_id, e)
 
     @commands.group(name="auto_translate", aliases=["at"], invoke_without_command=True)
     @commands.has_permissions(manage_channels=True)
@@ -168,7 +179,6 @@ class AutoTranslatorCog(commands.Cog):
         if source_id not in self.configs:
             self.configs[source_id] = []
 
-        # 重複チェック（同一ターゲットチャンネルへの設定があれば更新）
         updated = False
         for i, pair in enumerate(self.configs[source_id]):
             if pair["target_channel_id"] == target_channel.id:
@@ -186,6 +196,75 @@ class AutoTranslatorCog(commands.Cog):
             f"• 転送元: {source_channel.mention}\n"
             f"• 転送先: {target_channel.mention}\n"
             f"• 翻訳先言語: **{lang_info['label']}** (`{lang_code}`)"
+        )
+
+    @auto_translate.command(name="backfill")
+    @commands.has_permissions(manage_channels=True)
+    async def backfill_messages(
+        self,
+        ctx: commands.Context,
+        source_channel: discord.TextChannel,
+        target_channel: discord.TextChannel,
+        lang_code: str,
+        limit: int = 100
+    ):
+        """
+        過去ログを古い順から一括で翻訳・転送します。
+        使用例: !auto_translate backfill #japanese-chat #english-chat en 50
+        """
+        lang_info = get_lang_info_by_code(lang_code)
+        if not lang_info:
+            await ctx.send(
+                f"❌ 指定された言語コード `{lang_code}` が見つかりません。"
+            )
+            return
+
+        if limit < 1 or limit > 1000:
+            await ctx.send("⚠️ 取得件数は 1〜1000 件の間で指定してください。")
+            return
+
+        status_msg = await ctx.send(
+            f"🔄 {source_channel.mention} の過去メッセージ（最大 {limit} 件）を古い順から翻訳中...\n"
+            f"転送先: {target_channel.mention} | 言語: **{lang_info['label']}**"
+        )
+
+        deepl_lang = lang_info.get("deepl")
+        mymemory_lang = lang_info.get("mymemory")
+        lang_label = lang_info.get("label", "Unknown")
+
+        processed_count = 0
+        translated_count = 0
+
+        async for message in source_channel.history(limit=limit, oldest_first=True):
+            # Bot の発言や空テキスト、コマンド判定メッセージはスキップ
+            if message.author.bot or not message.content.strip():
+                continue
+
+            msg_ctx = await self.bot.get_context(message)
+            if msg_ctx.valid:
+                continue
+
+            processed_count += 1
+            success = await self._send_translated_embed(
+                message=message,
+                target_channel=target_channel,
+                deepl_lang=deepl_lang,
+                mymemory_lang=mymemory_lang,
+                lang_label=lang_label
+            )
+
+            if success:
+                translated_count += 1
+                # レート制限防止のため 1.2 秒インターバル
+                await asyncio.sleep(1.2)
+
+        await status_msg.edit(
+            content=(
+                f"✅ **バックフィル完了！**\n"
+                f"• 転送元: {source_channel.mention}\n"
+                f"• 転送先: {target_channel.mention}\n"
+                f"• 処理メッセージ数: {processed_count} 件中 **{translated_count} 件** を翻訳転送しました。"
+            )
         )
 
     @auto_translate.command(name="remove")
@@ -206,12 +285,10 @@ class AutoTranslatorCog(commands.Cog):
             return
 
         if target_channel is None:
-            # ソースチャンネルの設定を全て削除
             del self.configs[source_id]
             self._save_configs()
             await ctx.send(f"✅ {source_channel.mention} からの自動翻訳設定をすべて削除しました。")
         else:
-            # 特定のターゲットチャンネルのみ削除
             original_len = len(self.configs[source_id])
             self.configs[source_id] = [
                 p for p in self.configs[source_id] if p["target_channel_id"] != target_channel.id

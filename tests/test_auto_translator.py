@@ -1,5 +1,3 @@
-import json
-import os
 import unittest
 from utils.flag_map import get_lang_info_by_code
 
@@ -15,6 +13,10 @@ class TestAutoTranslator(unittest.TestCase):
         info_ja = get_lang_info_by_code("japanese")
         self.assertIsNotNone(info_ja)
         self.assertEqual(info_ja["mymemory"], "ja")
+
+        info_fr = get_lang_info_by_code("fr")
+        self.assertIsNotNone(info_fr)
+        self.assertEqual(info_fr["mymemory"], "fr")
 
         info_unknown = get_lang_info_by_code("xyz_unknown_lang")
         self.assertIsNone(info_unknown)
