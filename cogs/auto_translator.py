@@ -344,13 +344,20 @@ class AutoTranslatorCog(commands.Cog):
     @add_pair.error
     @backfill_messages.error
     @remove_pair.error
+    @auto_translate.error
     async def auto_translate_cmd_error(self, ctx: commands.Context, error: commands.CommandError):
         """自動翻訳コマンド群のエラーハンドラ"""
+        logger.info("自動翻訳コマンドエラー発生: user=%s, command=%s, error=%s", ctx.author, ctx.command, error)
+
         # Unwrap CommandInvokeError
         if isinstance(error, commands.CommandInvokeError):
             error = error.original
 
-        if isinstance(error, commands.ChannelNotFound):
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send(
+                f"🚫 **権限エラー**: このコマンドを実行するには「チャンネルの管理 (Manage Channels)」権限が必要です。"
+            )
+        elif isinstance(error, commands.ChannelNotFound):
             await ctx.send(
                 f"❌ チャンネル `{error.argument}` が見つかりませんでした。\n"
                 f"💡 **指定方法のヒント**:\n"
@@ -367,6 +374,9 @@ class AutoTranslatorCog(commands.Cog):
                 f"❌ パラメータが足りません: `{error.param.name}`\n"
                 f"💡 使用例: `!auto_translate backfill #転送元 #転送先 ja 100`"
             )
+        else:
+            await ctx.send(f"❌ コマンド実行中にエラーが発生しました: `{error}`")
+
 
 
 async def setup(bot: commands.Bot):

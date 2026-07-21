@@ -56,6 +56,20 @@ async def _start_health_server() -> None:
 async def on_ready():
     logger.info("ボット起動完了: %s (ID: %s)", bot.user, bot.user.id)
     logger.info("接続サーバー数: %d", len(bot.guilds))
+    for guild in bot.guilds:
+        logger.info("  - Guild: %s (ID: %s)", guild.name, guild.id)
+
+
+@bot.event
+async def on_command(ctx: commands.Context):
+    logger.info("コマンド受信: user=%s (ID:%s), channel=%s (ID:%s), command=%s",
+                ctx.author, ctx.author.id, ctx.channel, ctx.channel.id, ctx.message.content)
+
+
+@bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError):
+    logger.error("グローバルコマンドエラー: command=%s, error=%s", ctx.message.content, error)
+
 
 
 async def main():
