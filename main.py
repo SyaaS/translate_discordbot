@@ -71,7 +71,11 @@ async def main():
         logger.info("コグ cogs.translator を読み込みました")
         await bot.load_extension("cogs.emoji_manager")
         logger.info("コグ cogs.emoji_manager を読み込みました")
+        await bot.load_extension("cogs.auto_translator")
+        logger.info("コグ cogs.auto_translator を読み込みました")
+
         await bot.start(token)
+
 
 
 if __name__ == "__main__":

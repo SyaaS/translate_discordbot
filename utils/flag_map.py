@@ -6,6 +6,9 @@ mymemory:  MyMemory API の言語コード（ISO 639-1 ベース）。
 label:     人が読める言語名。
 """
 
+from __future__ import annotations
+
+
 FLAG_TO_LANG: dict[str, dict] = {
     # アジア
     "🇯🇵": {"deepl": "JA",    "mymemory": "ja",    "label": "Japanese"},
@@ -89,3 +92,53 @@ def is_flag_emoji(emoji: str) -> bool:
     if len(emoji) != 2:
         return False
     return all(0x1F1E6 <= ord(c) <= 0x1F1FF for c in emoji)
+
+
+CODE_TO_LANG: dict[str, dict] = {
+    "ja": {"deepl": "JA", "mymemory": "ja", "label": "Japanese"},
+    "japanese": {"deepl": "JA", "mymemory": "ja", "label": "Japanese"},
+    "en": {"deepl": "EN-US", "mymemory": "en", "label": "English"},
+    "english": {"deepl": "EN-US", "mymemory": "en", "label": "English"},
+    "zh": {"deepl": "ZH-HANS", "mymemory": "zh-CN", "label": "Chinese (Simplified)"},
+    "chinese": {"deepl": "ZH-HANS", "mymemory": "zh-CN", "label": "Chinese (Simplified)"},
+    "zh-tw": {"deepl": "ZH-HANT", "mymemory": "zh-TW", "label": "Chinese (Traditional)"},
+    "ko": {"deepl": "KO", "mymemory": "ko", "label": "Korean"},
+    "korean": {"deepl": "KO", "mymemory": "ko", "label": "Korean"},
+    "fr": {"deepl": "FR", "mymemory": "fr", "label": "French"},
+    "french": {"deepl": "FR", "mymemory": "fr", "label": "French"},
+    "de": {"deepl": "DE", "mymemory": "de", "label": "German"},
+    "german": {"deepl": "DE", "mymemory": "de", "label": "German"},
+    "es": {"deepl": "ES", "mymemory": "es", "label": "Spanish"},
+    "spanish": {"deepl": "ES", "mymemory": "es", "label": "Spanish"},
+    "pt": {"deepl": "PT-PT", "mymemory": "pt", "label": "Portuguese"},
+    "portuguese": {"deepl": "PT-PT", "mymemory": "pt", "label": "Portuguese"},
+    "it": {"deepl": "IT", "mymemory": "it", "label": "Italian"},
+    "italian": {"deepl": "IT", "mymemory": "it", "label": "Italian"},
+    "ru": {"deepl": "RU", "mymemory": "ru", "label": "Russian"},
+    "russian": {"deepl": "RU", "mymemory": "ru", "label": "Russian"},
+    "vi": {"deepl": "VI", "mymemory": "vi", "label": "Vietnamese"},
+    "th": {"deepl": "TH", "mymemory": "th", "label": "Thai"},
+    "id": {"deepl": "ID", "mymemory": "id", "label": "Indonesian"},
+}
+
+
+def get_lang_info_by_code(code: str) -> dict | None:
+    """
+    言語コード（例: 'en', 'ja', 'zh', 'french' 等）から言語情報を返す。
+    見つからない場合は mymemory / deepl と一致するものが FLAG_TO_LANG 内にあればそれを動的に返す。
+    """
+    key = code.strip().lower()
+    if key in CODE_TO_LANG:
+        return CODE_TO_LANG[key]
+
+    # FLAG_TO_LANG 内を検索
+    for item in FLAG_TO_LANG.values():
+        if item["mymemory"].lower() == key:
+            return item
+        if item.get("deepl") and item["deepl"].lower() == key:
+            return item
+        if item["label"].lower() == key:
+            return item
+
+    return None
+

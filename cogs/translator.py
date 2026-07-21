@@ -5,7 +5,10 @@ TranslatorCog: リアクション → 翻訳 → スレッド投稿 → スレ�
 対応する絵文字はギルド単位の設定（emoji_config）で管理される。
 """
 
+from __future__ import annotations
+
 import logging
+
 
 import discord
 from discord.ext import commands
