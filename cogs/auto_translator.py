@@ -341,6 +341,34 @@ class AutoTranslatorCog(commands.Cog):
         else:
             await ctx.send(embed=embed)
 
+    @add_pair.error
+    @backfill_messages.error
+    @remove_pair.error
+    async def auto_translate_cmd_error(self, ctx: commands.Context, error: commands.CommandError):
+        """自動翻訳コマンド群のエラーハンドラ"""
+        # Unwrap CommandInvokeError
+        if isinstance(error, commands.CommandInvokeError):
+            error = error.original
+
+        if isinstance(error, commands.ChannelNotFound):
+            await ctx.send(
+                f"❌ チャンネル `{error.argument}` が見つかりませんでした。\n"
+                f"💡 **指定方法のヒント**:\n"
+                f"• `#` を入力してメニューから選択する **チャンネルメンション**（例: `#チャンネル名`）を指定してください。\n"
+                f"• または、チャンネルを右クリックしてコピーできる **18桁のチャンネルID** を直接入力してください。"
+            )
+        elif isinstance(error, commands.BadArgument):
+            await ctx.send(
+                f"❌ 入力されたパラメータの形式が正しくありません。\n"
+                f"💡 使用例: `!auto_translate backfill #転送元 #転送先 ja 100`"
+            )
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send(
+                f"❌ パラメータが足りません: `{error.param.name}`\n"
+                f"💡 使用例: `!auto_translate backfill #転送元 #転送先 ja 100`"
+            )
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(AutoTranslatorCog(bot))
+
