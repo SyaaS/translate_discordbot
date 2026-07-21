@@ -61,6 +61,14 @@ async def on_ready():
 
 
 @bot.event
+async def on_message(message: discord.Message):
+    if not message.author.bot:
+        logger.info("Message received: author=%s, channel=%s(ID:%s), content=%r",
+                    message.author, message.channel, message.channel.id, message.content)
+    await bot.process_commands(message)
+
+
+@bot.event
 async def on_command(ctx: commands.Context):
     logger.info("コマンド受信: user=%s (ID:%s), channel=%s (ID:%s), command=%s",
                 ctx.author, ctx.author.id, ctx.channel, ctx.channel.id, ctx.message.content)
@@ -69,6 +77,7 @@ async def on_command(ctx: commands.Context):
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     logger.error("グローバルコマンドエラー: command=%s, error=%s", ctx.message.content, error)
+
 
 
 
