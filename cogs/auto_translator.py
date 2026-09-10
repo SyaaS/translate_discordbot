@@ -53,7 +53,7 @@ def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
     """
     環境変数 AUTO_TRANSLATE_PAIRS 文字列をパースする。
     フォーマット: "ソースID:ターゲットID:言語コード[:モード][:絵文字][:ユーザー1;ユーザー2][:元言語制限],..."
-    例: "333333333333333333:222222222222222222:en:trigger:<:translate_en:1234>:user1:ja"
+    例: "123456789012345678:987654321098765432:en:trigger:<:translate_en:1234>:user1:ja"
     """
     configs: dict[str, list[dict]] = {}
     env_str_clean = clean_str(env_str)
@@ -159,7 +159,7 @@ class AutoTranslatorCog(commands.Cog):
     def _load_configs(self) -> dict:
         """設定ファイルおよび環境変数から設定を読み込んで構造化する。"""
         data = {
-            "trigger_users": ["user1"],
+            "trigger_users": [],
             "trigger_emojis": ["🌐"],
             "channels": {}
         }
@@ -173,7 +173,7 @@ class AutoTranslatorCog(commands.Cog):
                         # 旧形式データ（channel_id のみがルートキー）の判定と移行
                         if "channels" in loaded:
                             data["channels"] = loaded.get("channels", {})
-                            data["trigger_users"] = loaded.get("trigger_users", ["user1"])
+                            data["trigger_users"] = loaded.get("trigger_users", [])
                             data["trigger_emojis"] = loaded.get("trigger_emojis", ["🌐"])
                         else:
                             data["channels"] = loaded
@@ -443,7 +443,7 @@ class AutoTranslatorCog(commands.Cog):
             except discord.HTTPException:
                 return
 
-        global_trigger_users = self.configs.get("trigger_users", ["user1"])
+        global_trigger_users = self.configs.get("trigger_users", [])
 
         # 該当する各ペアについて、発言者＆実行者検証を行って翻訳投稿
         for pair in matching_pairs:
@@ -643,7 +643,7 @@ class AutoTranslatorCog(commands.Cog):
             source_channel, target_channel, lang_info, lang_code, mode="trigger", emoji=emoji, target_users=target_users, source_lang_limit=source_lang
         )
         
-        global_users = ", ".join(self.configs.get("trigger_users", ["user1"]))
+        global_users = ", ".join(self.configs.get("trigger_users", []))
         global_emojis = " ".join(self.configs.get("trigger_emojis", ["🌐"]))
 
         emoji_str = emoji if emoji else f"{global_emojis} (全体設定)"
@@ -654,7 +654,7 @@ class AutoTranslatorCog(commands.Cog):
             f"✅ **トリガー限定翻訳ペア**を設定しました！\n"
             f"• 転送元: {source_channel.mention}\n"
             f"• 転送先: {target_channel.mention}\n"
-            f"• 言語: **{lang_info['label']}** (`{lang_code}`)\n"
+            f"• 言語: **{lang_label}** (`{lang_code}`)\n"
             f"• トリガースタンプ: {emoji_str}\n"
             f"• 対象ユーザー: **{user_str}**{src_lang_info}\n"
             f"💡 対象ユーザーが発言し、指定スタンプが押された時のみ翻訳転送されます。"
@@ -671,7 +671,7 @@ class AutoTranslatorCog(commands.Cog):
     @commands.has_permissions(manage_channels=True)
     async def add_trigger_user(self, ctx: commands.Context, username_or_id: str):
         """トリガー対象ユーザーを追加します。"""
-        users = self.configs.get("trigger_users", ["user1"])
+        users = self.configs.get("trigger_users", [])
         if username_or_id not in users:
             users.append(username_or_id)
             self.configs["trigger_users"] = users
@@ -684,7 +684,7 @@ class AutoTranslatorCog(commands.Cog):
     @commands.has_permissions(manage_channels=True)
     async def remove_trigger_user(self, ctx: commands.Context, username_or_id: str):
         """トリガー対象ユーザーを削除します。"""
-        users = self.configs.get("trigger_users", ["user1"])
+        users = self.configs.get("trigger_users", [])
         if username_or_id in users:
             users.remove(username_or_id)
             self.configs["trigger_users"] = users
@@ -697,7 +697,7 @@ class AutoTranslatorCog(commands.Cog):
     @commands.has_permissions(manage_channels=True)
     async def list_trigger_users(self, ctx: commands.Context):
         """トリガー対象ユーザー一覧を表示します。"""
-        users = self.configs.get("trigger_users", ["user1"])
+        users = self.configs.get("trigger_users", [])
         await ctx.send(f"👤 **現在のトリガー対象ユーザー**: {', '.join(users) if users else 'なし'}")
 
     # ── トリガースタンプ管理グループ ──
@@ -744,7 +744,7 @@ class AutoTranslatorCog(commands.Cog):
     @commands.has_permissions(manage_channels=True)
     async def trigger_info(self, ctx: commands.Context):
         """トリガー翻訳設定の総合情報を表示します。"""
-        users = ", ".join(self.configs.get("trigger_users", ["user1"]))
+        users = ", ".join(self.configs.get("trigger_users", []))
         emojis = " ".join(self.configs.get("trigger_emojis", ["🌐"]))
 
         embed = discord.Embed(
@@ -987,7 +987,7 @@ class AutoTranslatorCog(commands.Cog):
                 export_items.append(f"{source_id}:{target_id}:{lang_code}:{mode}:{emoji}:{users_str}:{source_lang_str}")
 
         env_pairs_val = ",".join(export_items)
-        users_val = ",".join(self.configs.get("trigger_users", ["user1"]))
+        users_val = ",".join(self.configs.get("trigger_users", []))
         emojis_val = ",".join(self.configs.get("trigger_emojis", ["🌐"]))
 
         out_msg = (

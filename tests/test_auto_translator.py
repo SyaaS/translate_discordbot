@@ -28,14 +28,14 @@ class TestAutoTranslator(unittest.TestCase):
         self.assertEqual(info_ja["mymemory"], "ja")
 
     def test_parse_env_pairs_with_mode(self):
-        env_str = "333333333333333333:222222222222222222:en:trigger, 12345:67890:ja:all"
+        env_str = "11111:22222:en:trigger, 12345:67890:ja:all"
         configs = parse_env_pairs(env_str)
 
-        self.assertIn("333333333333333333", configs)
-        self.assertEqual(len(configs["333333333333333333"]), 1)
-        self.assertEqual(configs["333333333333333333"][0]["target_channel_id"], 222222222222222222)
-        self.assertEqual(configs["333333333333333333"][0]["target_lang_code"], "en")
-        self.assertEqual(configs["333333333333333333"][0]["mode"], "trigger")
+        self.assertIn("11111", configs)
+        self.assertEqual(len(configs["11111"]), 1)
+        self.assertEqual(configs["11111"][0]["target_channel_id"], 22222)
+        self.assertEqual(configs["11111"][0]["target_lang_code"], "en")
+        self.assertEqual(configs["11111"][0]["mode"], "trigger")
 
         self.assertIn("12345", configs)
         self.assertEqual(configs["12345"][0]["mode"], "all")
