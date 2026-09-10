@@ -1,5 +1,5 @@
 """
-AutoTranslatorCog: チャンネル間自動翻訳転送機能（リアルタイム＆バックフィル＆環境変数永続化対応）
+AutoTranslatorCog: チャンネル間自動翻訳転送機能（リアルタイム＆バックフィル重複防止＆環境変数永続化対応）
 """
 
 from __future__ import annotations
@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Optional
 
 import discord
@@ -19,6 +20,25 @@ from utils.translator import translate
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = os.path.join("data", "channel_config.json")
+JUMP_URL_PATTERN = re.compile(r"https://discord\.com/channels/\d+/\d+/(\d+)")
+
+
+def extract_source_message_id(embed: discord.Embed) -> Optional[int]:
+    """
+    転送先 Embed の内容（Jump to Message リンク）から、元メッセージのIDを抽出する。
+    """
+    for field in embed.fields:
+        if field.name == "Original Message" and field.value:
+            match = JUMP_URL_PATTERN.search(field.value)
+            if match:
+                return int(match.group(1))
+
+    if embed.description:
+        match = JUMP_URL_PATTERN.search(embed.description)
+        if match:
+            return int(match.group(1))
+
+    return None
 
 
 def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
@@ -85,7 +105,6 @@ class AutoTranslatorCog(commands.Cog):
         """設定ファイルおよび環境変数 AUTO_TRANSLATE_PAIRS から設定を読み込んでマージする。"""
         configs: dict[str, list[dict]] = {}
 
-        # 1. ローカル JSON ファイルからの読み込み
         if os.path.exists(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -94,7 +113,6 @@ class AutoTranslatorCog(commands.Cog):
                 logger.error("設定ファイルの読み込みに失敗しました: %s", e)
                 configs = {}
 
-        # 2. 環境変数からの自動パースとマージ
         env_str = os.getenv("AUTO_TRANSLATE_PAIRS", "").strip()
         if env_str:
             env_configs = parse_env_pairs(env_str)
@@ -102,7 +120,6 @@ class AutoTranslatorCog(commands.Cog):
                 if s_id not in configs:
                     configs[s_id] = []
                 for env_pair in pairs:
-                    # 既に同じターゲットIDの設定が存在しない場合のみ追加
                     if not any(p["target_channel_id"] == env_pair["target_channel_id"] for p in configs[s_id]):
                         configs[s_id].append(env_pair)
 
@@ -117,6 +134,27 @@ class AutoTranslatorCog(commands.Cog):
             logger.info("自動翻訳設定を保存しました")
         except Exception as e:
             logger.error("設定ファイルの保存に失敗しました: %s", e)
+
+    async def _get_already_translated_source_ids(
+        self,
+        target_channel: discord.TextChannel,
+        scan_limit: int = 500
+    ) -> set[int]:
+        """
+        転送先チャンネルの過去ログから、既に転送済みの元メッセージID集合を取得する。
+        """
+        translated_source_ids: set[int] = set()
+        try:
+            async for msg in target_channel.history(limit=scan_limit):
+                if msg.author == self.bot.user and msg.embeds:
+                    for embed in msg.embeds:
+                        source_id = extract_source_message_id(embed)
+                        if source_id:
+                            translated_source_ids.add(source_id)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            logger.warning("既転送メッセージのスキャンに失敗しました: %s", e)
+
+        return translated_source_ids
 
     async def _send_translated_embed(
         self,
@@ -136,7 +174,6 @@ class AutoTranslatorCog(commands.Cog):
 
         translated_text, engine = translate(content, deepl_lang, mymemory_lang)
 
-        # 同一言語または翻訳失敗時
         if engine == "same_language" or not translated_text:
             return False
 
@@ -270,11 +307,14 @@ class AutoTranslatorCog(commands.Cog):
         source_channel: discord.TextChannel,
         target_channel: discord.TextChannel,
         lang_code: str,
-        limit: int = 100
+        limit: int = 100,
+        after_message_id: Optional[int] = None
     ):
         """
-        過去ログを古い順から一括で翻訳・転送します。
-        使用例: !auto_translate backfill #japanese-chat #english-chat en 50
+        過去ログを古い順から一括で翻訳・転送します（重複自動スキップ機能付き）。
+        使用例:
+          !auto_translate backfill #japanese-chat #english-chat en 50
+          !auto_translate backfill #japanese-chat #english-chat en 100 123456789012345678
         """
         lang_info = get_lang_info_by_code(lang_code)
         if not lang_info:
@@ -287,9 +327,30 @@ class AutoTranslatorCog(commands.Cog):
             await ctx.send("⚠️ 取得件数は 1〜1000 件の間で指定してください。")
             return
 
+        after_msg = None
+        if after_message_id is not None:
+            try:
+                after_msg = await source_channel.fetch_message(after_message_id)
+            except discord.NotFound:
+                await ctx.send(f"❌ 指定された開始メッセージID `{after_message_id}` が転送元チャンネルで見つかりませんでした。")
+                return
+            except (discord.Forbidden, discord.HTTPException) as e:
+                await ctx.send(f"❌ メッセージの取得に失敗しました: {e}")
+                return
+
         status_msg = await ctx.send(
-            f"🔄 {source_channel.mention} の過去メッセージ（最大 {limit} 件）を古い順から翻訳中...\n"
-            f"転送先: {target_channel.mention} | 言語: **{lang_info['label']}**"
+            f"🔄 転送先チャンネルの既存ログをスキャン中..."
+        )
+
+        # 既転送済みメッセージID集合の自動取得
+        already_translated_ids = await self._get_already_translated_source_ids(target_channel)
+
+        after_info = f" (メッセージID: `{after_message_id}` の直後から)" if after_message_id else ""
+        await status_msg.edit(
+            content=(
+                f"🔄 {source_channel.mention} の過去メッセージ（最大 {limit} 件）を古い順から翻訳中{after_info}...\n"
+                f"転送先: {target_channel.mention} | 言語: **{lang_info['label']}** (検出済み転送済み: {len(already_translated_ids)} 件スキップ可能)"
+            )
         )
 
         deepl_lang = lang_info.get("deepl")
@@ -298,13 +359,26 @@ class AutoTranslatorCog(commands.Cog):
 
         processed_count = 0
         translated_count = 0
+        skipped_duplicate_count = 0
 
-        async for message in source_channel.history(limit=limit, oldest_first=True):
+        history_kwargs = {
+            "limit": limit,
+            "oldest_first": True,
+        }
+        if after_msg:
+            history_kwargs["after"] = after_msg
+
+        async for message in source_channel.history(**history_kwargs):
             if message.author.bot or not message.content.strip():
                 continue
 
             msg_ctx = await self.bot.get_context(message)
             if msg_ctx.valid:
+                continue
+
+            # 二重投稿の自動判定・スキップ
+            if message.id in already_translated_ids:
+                skipped_duplicate_count += 1
                 continue
 
             processed_count += 1
@@ -325,7 +399,8 @@ class AutoTranslatorCog(commands.Cog):
                 f"✅ **バックフィル完了！**\n"
                 f"• 転送元: {source_channel.mention}\n"
                 f"• 転送先: {target_channel.mention}\n"
-                f"• 処理メッセージ数: {processed_count} 件中 **{translated_count} 件** を翻訳転送しました。"
+                f"• 処理メッセージ数: **{translated_count} 件** を新規翻訳転送しました。\n"
+                f"• スキップ件数: 既転送済み重複 `{skipped_duplicate_count}` 件 / 対象外 `{processed_count - translated_count}` 件"
             )
         )
 
@@ -453,12 +528,12 @@ class AutoTranslatorCog(commands.Cog):
         elif isinstance(error, commands.BadArgument):
             await ctx.send(
                 f"❌ 入力されたパラメータの形式が正しくありません。\n"
-                f"💡 使用例: `!auto_translate backfill #転送元 #転送先 ja 100`"
+                f"💡 使用例: `!auto_translate backfill #転送元 #転送先 ja 100 [開始メッセージID]`"
             )
         elif isinstance(error, commands.MissingRequiredArgument):
             await ctx.send(
                 f"❌ パラメータが足りません: `{error.param.name}`\n"
-                f"💡 使用例: `!auto_translate backfill #転送元 #転送先 ja 100`"
+                f"💡 使用例: `!auto_translate backfill #転送元 #転送先 ja 100 [開始メッセージID]`"
             )
         else:
             await ctx.send(f"❌ コマンド実行中にエラーが発生しました: `{error}`")
