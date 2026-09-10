@@ -279,7 +279,7 @@ class AutoTranslatorCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """メッセージ投稿時に全自動翻訳 (mode == 'all') を行うリスナー。"""
+        """メッセージ投稿時に全自動翻訳 (mode == 'all') およびスレッド自動翻訳 (mode == 'thread') を行うリスナー。"""
 
         if message.author.bot:
             return
@@ -293,7 +293,7 @@ class AutoTranslatorCog(commands.Cog):
         if source_channel_id not in channels_config:
             return
 
-        # mode == 'all' のペアのみを全自動翻訳対象とする
+        # 1. mode == 'all' のペア (全自動・別チャンネル転送)
         all_pairs = [p for p in channels_config[source_channel_id] if p.get("mode", "all") == "all"]
         for pair in all_pairs:
             # 特定ユーザー限定フィルタが設定されている場合の検証
@@ -327,6 +327,46 @@ class AutoTranslatorCog(commands.Cog):
                 mymemory_lang=mymemory_lang,
                 lang_label=lang_label
             )
+
+        # 2. mode == 'thread' のペア (スレッド内自動翻訳)
+        # スレッド内の発言に対してさらにスレッドを作らないよう、通常テキストチャンネルの発言のみを対象とする
+        thread_pairs = [p for p in channels_config[source_channel_id] if p.get("mode") == "thread"]
+        if thread_pairs and not isinstance(message.channel, discord.Thread):
+            for pair in thread_pairs:
+                target_users = pair.get("target_users")
+                if target_users:
+                    author_match = (
+                        str(message.author.id) in target_users
+                        or message.author.name.lower() in [u.lower() for u in target_users]
+                        or message.author.display_name.lower() in [u.lower() for u in target_users]
+                    )
+                    if not author_match:
+                        continue
+
+                deepl_lang = pair.get("deepl_lang")
+                mymemory_lang = pair.get("mymemory_lang")
+                lang_label = pair.get("lang_label", "Unknown")
+
+                # スレッドの取得または新規作成
+                target_thread = message.thread
+                if target_thread is None:
+                    try:
+                        thread_name = f"🌐 翻訳 ({lang_label})"
+                        target_thread = await message.create_thread(
+                            name=thread_name,
+                            auto_archive_duration=1440
+                        )
+                    except (discord.Forbidden, discord.HTTPException) as e:
+                        logger.error("自動翻訳スレッド作成失敗: msg_id=%s, error=%s", message.id, e)
+                        continue
+
+                await self._send_translated_embed(
+                    message=message,
+                    target_channel=target_thread,
+                    deepl_lang=deepl_lang,
+                    mymemory_lang=mymemory_lang,
+                    lang_label=lang_label
+                )
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
@@ -503,7 +543,38 @@ class AutoTranslatorCog(commands.Cog):
         lang_code: str,
         target_user: Optional[str] = None
     ):
-        """全自動翻訳ペアを追加します。（[target_user] 指定時は特定ユーザーのみ自動翻訳）"""
+        """全自動翻訳ペアを追加します。（転送元と転送先が同じ場合はスレッド内自動翻訳になります）"""
+        lang_info = get_lang_info_by_code(lang_code)
+        if not lang_info:
+            await ctx.send(f"❌ 指定された言語コード `{lang_code}` が見つかりません。")
+            return
+
+        mode = "thread" if source_channel.id == target_channel.id else "all"
+        target_users = [target_user] if target_user else None
+        self._add_pair_internal(
+            source_channel, target_channel, lang_info, lang_code, mode=mode, target_users=target_users
+        )
+        user_info = f"\n• 対象ユーザー: **{target_user}** 限定" if target_user else " (全ユーザー対象)"
+        mode_label = "スレッド自動翻訳" if mode == "thread" else "全自動翻訳"
+        dest_info = f"• 転送先: {target_channel.mention}\n" if mode == "all" else f"• 対象チャンネル: {source_channel.mention}\n"
+        await ctx.send(
+            f"✅ **{mode_label}ペア**を設定しました！\n"
+            f"• 転送元: {source_channel.mention}\n"
+            f"{dest_info}"
+            f"• 言語: **{lang_info['label']}** (`{lang_code}`)\n"
+            f"• モード: **{mode_label}**{user_info}"
+        )
+
+    @auto_translate.command(name="add_thread")
+    @commands.has_permissions(manage_channels=True)
+    async def add_thread_pair(
+        self,
+        ctx: commands.Context,
+        source_channel: discord.TextChannel,
+        lang_code: str,
+        target_user: Optional[str] = None
+    ):
+        """スレッド自動翻訳ペアを追加します。（指定チャンネルの発言の直下にスレッドを作成して翻訳投稿）"""
         lang_info = get_lang_info_by_code(lang_code)
         if not lang_info:
             await ctx.send(f"❌ 指定された言語コード `{lang_code}` が見つかりません。")
@@ -511,15 +582,20 @@ class AutoTranslatorCog(commands.Cog):
 
         target_users = [target_user] if target_user else None
         self._add_pair_internal(
-            source_channel, target_channel, lang_info, lang_code, mode="all", target_users=target_users
+            source_channel=source_channel,
+            target_channel=source_channel,
+            lang_info=lang_info,
+            lang_code=lang_code,
+            mode="thread",
+            target_users=target_users
         )
         user_info = f"\n• 対象ユーザー: **{target_user}** 限定" if target_user else " (全ユーザー対象)"
         await ctx.send(
-            f"✅ **全自動翻訳ペア**を設定しました！\n"
-            f"• 転送元: {source_channel.mention}\n"
-            f"• 転送先: {target_channel.mention}\n"
+            f"✅ **スレッド自動翻訳ペア**を設定しました！\n"
+            f"• 対象チャンネル: {source_channel.mention}\n"
             f"• 言語: **{lang_info['label']}** (`{lang_code}`)\n"
-            f"• モード: **全自動翻訳**{user_info}"
+            f"• モード: **スレッド自動翻訳**{user_info}\n"
+            f"💡 発言の直下に自動でスレッドが作成され、翻訳が投稿されます。"
         )
 
     @auto_translate.command(name="add_trigger")
@@ -832,12 +908,18 @@ class AutoTranslatorCog(commands.Cog):
                 target_chan = self.bot.get_channel(pair["target_channel_id"])
                 target_name = target_chan.mention if target_chan else f"ID: {pair['target_channel_id']}"
                 lang_label = pair.get("lang_label", "Unknown")
-                mode_str = " (トリガー限定)" if pair.get("mode") == "trigger" else " (全自動)"
+                if pair.get("mode") == "thread":
+                    mode_str = " (スレッド自動翻訳)"
+                elif pair.get("mode") == "trigger":
+                    mode_str = " (トリガー限定)"
+                else:
+                    mode_str = " (全自動)"
+
                 from_env = " [環境変数]" if pair.get("is_from_env") else ""
 
                 pair_details = [
                     f"• **転送元**: {source_name}",
-                    f"• **転送先**: {target_name}",
+                    f"• **転送先/対象**: {target_name if pair.get('mode') != 'thread' else 'スレッド作成'}",
                     f"• **言語**: {lang_label}"
                 ]
                 if pair.get("emoji"):
@@ -891,6 +973,7 @@ class AutoTranslatorCog(commands.Cog):
         await ctx.send(out_msg)
 
     @add_pair.error
+    @add_thread_pair.error
     @add_trigger_pair.error
     @backfill_messages.error
     @remove_pair.error
