@@ -69,8 +69,11 @@ echo "GCP Secret Manager にシークレットを登録します (project: $PROJ
 while IFS='=' read -r key value; do
   # 空行やコメントをスキップ
   [[ -z "$key" || "$key" =~ ^# ]] && continue
-  # 値が空の場合はスキップ
-  [[ -z "$value" ]] && continue
+  # 値の前後のダブルクォート・シングルクォートを除去
+  value="${value#\"}"
+  value="${value%\"}"
+  value="${value#\'}"
+  value="${value%\'}"
 
   secret_name="${SECRET_PREFIX}${key}"
 

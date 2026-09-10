@@ -41,38 +41,73 @@ def extract_source_message_id(embed: discord.Embed) -> Optional[int]:
     return None
 
 
+def clean_str(val: Optional[str]) -> Optional[str]:
+    """文字列の前後の空白、タブ、改行、ダブルクォート、シングルクォートを除去する。"""
+    if not val:
+        return None
+    s = val.strip(" \t\n\r\"'")
+    return s if s else None
+
+
 def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
     """
     環境変数 AUTO_TRANSLATE_PAIRS 文字列をパースする。
     フォーマット: "ソースID:ターゲットID:言語コード[:モード][:絵文字][:ユーザー1;ユーザー2],..."
-    例: "333333333333333333:222222222222222222:en:trigger:🇺🇸:user1"
+    例: "333333333333333333:222222222222222222:en:trigger:<:translate_en:1234>:user1"
     """
     configs: dict[str, list[dict]] = {}
-    if not env_str or not env_str.strip():
+    env_str_clean = clean_str(env_str)
+    if not env_str_clean:
         return configs
 
-    raw_items = env_str.split(",")
+    raw_items = env_str_clean.split(",")
     for item in raw_items:
-        item = item.strip()
-        if not item:
+        item_clean = clean_str(item)
+        if not item_clean:
             continue
-        parts = item.split(":")
+
+        parts = item_clean.split(":", 4)
         if len(parts) < 3:
             logger.warning("環境変数 AUTO_TRANSLATE_PAIRS のパース失敗 (形式不正): %s", item)
             continue
 
-        source_id_str = parts[0].strip()
-        target_id_str = parts[1].strip()
-        lang_code = parts[2].strip()
-        mode = parts[3].strip().lower() if len(parts) >= 4 and parts[3].strip() else "all"
-        emoji = parts[4].strip() if len(parts) >= 5 and parts[4].strip() else None
-        users_str = parts[5].strip() if len(parts) >= 6 and parts[5].strip() else None
-        target_users = [u.strip() for u in users_str.split(";") if u.strip()] if users_str else None
+        source_id_str = clean_str(parts[0])
+        target_id_str = clean_str(parts[1])
+        lang_code = clean_str(parts[2])
+        if not source_id_str or not target_id_str or not lang_code:
+            continue
+
+        mode = clean_str(parts[3]).lower() if len(parts) >= 4 and clean_str(parts[3]) else "all"
+
+        emoji = None
+        target_users = None
+
+        if len(parts) >= 5 and parts[4]:
+            rest = parts[4].strip(" \t\n\r\"'")
+            if rest.startswith("<"):
+                idx = rest.find(">")
+                if idx != -1:
+                    emoji = clean_str(rest[:idx + 1])
+                    users_str = clean_str(rest[idx + 1:].lstrip(":"))
+                else:
+                    emoji = clean_str(rest)
+                    users_str = None
+            elif ":" in rest:
+                e_part, u_part = rest.split(":", 1)
+                emoji = clean_str(e_part)
+                users_str = clean_str(u_part)
+            else:
+                emoji = clean_str(rest)
+                users_str = None
+
+            if users_str:
+                target_users = [u for u in [clean_str(x) for x in users_str.split(";")] if u]
 
         try:
-            target_id = int(target_id_str)
+            target_id = int(re.sub(r"\D", "", target_id_str))
+            source_id_clean = re.sub(r"\D", "", source_id_str)
         except ValueError:
-            logger.warning("環境変数 AUTO_TRANSLATE_PAIRS のターゲットID不正: %s", target_id_str)
+            logger.warning("環境変数 AUTO_TRANSLATE_PAIRS のID不正: %s -> %s", source_id_str, target_id_str)
             continue
 
         lang_info = get_lang_info_by_code(lang_code)
@@ -92,17 +127,17 @@ def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
             "is_from_env": True
         }
 
-        if source_id_str not in configs:
-            configs[source_id_str] = []
+        if source_id_clean not in configs:
+            configs[source_id_clean] = []
 
         if not any(
             p["target_channel_id"] == target_id 
             and p.get("mode", "all") == mode 
             and p.get("emoji") == emoji
             and p.get("target_users") == target_users
-            for p in configs[source_id_str]
+            for p in configs[source_id_clean]
         ):
-            configs[source_id_str].append(pair_data)
+            configs[source_id_clean].append(pair_data)
 
     return configs
 
@@ -139,16 +174,20 @@ class AutoTranslatorCog(commands.Cog):
                 logger.error("設定ファイルの読み込みに失敗しました: %s", e)
 
         # 2. 環境変数 TRIGGER_USERS / TRIGGER_EMOJIS の上書き・マージ
-        env_users = os.getenv("TRIGGER_USERS", "").strip()
+        env_users = clean_str(os.getenv("TRIGGER_USERS", ""))
         if env_users:
-            data["trigger_users"] = [u.strip() for u in env_users.split(",") if u.strip()]
+            parsed_users = [u for u in [clean_str(x) for x in env_users.split(",")] if u]
+            if parsed_users:
+                data["trigger_users"] = parsed_users
 
-        env_emojis = os.getenv("TRIGGER_EMOJIS", "").strip()
+        env_emojis = clean_str(os.getenv("TRIGGER_EMOJIS", ""))
         if env_emojis:
-            data["trigger_emojis"] = [e.strip() for e in env_emojis.split(",") if e.strip()]
+            parsed_emojis = [e for e in [clean_str(x) for x in env_emojis.split(",")] if e]
+            if parsed_emojis:
+                data["trigger_emojis"] = parsed_emojis
 
         # 3. 環境変数 AUTO_TRANSLATE_PAIRS からのペア自動マージ
-        env_str = os.getenv("AUTO_TRANSLATE_PAIRS", "").strip()
+        env_str = clean_str(os.getenv("AUTO_TRANSLATE_PAIRS", ""))
         if env_str:
             env_channels = parse_env_pairs(env_str)
             for s_id, pairs in env_channels.items():
@@ -618,7 +657,8 @@ class AutoTranslatorCog(commands.Cog):
         channels_config = self.configs.get("channels", {})
         count = 0
         for s_id, pairs in channels_config.items():
-            s_chan = self.bot.get_channel(int(s_id))
+            s_id_clean = re.sub(r"\D", "", str(s_id))
+            s_chan = self.bot.get_channel(int(s_id_clean)) if s_id_clean else None
             s_name = s_chan.mention if s_chan else f"ID: {s_id}"
 
             for pair in pairs:
@@ -784,7 +824,8 @@ class AutoTranslatorCog(commands.Cog):
 
         count = 0
         for source_id, pairs in channels_config.items():
-            source_chan = self.bot.get_channel(int(source_id))
+            source_id_clean = re.sub(r"\D", "", str(source_id))
+            source_chan = self.bot.get_channel(int(source_id_clean)) if source_id_clean else None
             source_name = source_chan.mention if source_chan else f"ID: {source_id}"
 
             for pair in pairs:
