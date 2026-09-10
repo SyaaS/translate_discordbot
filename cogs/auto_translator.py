@@ -1,5 +1,5 @@
 """
-AutoTranslatorCog: チャンネル間自動翻訳転送機能（リアルタイム＆バックフィル重複防止＆環境変数永続化対応）
+AutoTranslatorCog: チャンネル間自動翻訳転送機能（全自動/トリガー別モード・重複防止・本人認証対応）
 """
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ def extract_source_message_id(embed: discord.Embed) -> Optional[int]:
 def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
     """
     環境変数 AUTO_TRANSLATE_PAIRS 文字列をパースする。
-    フォーマット: "ソースID:ターゲットID:言語コード,ソースID2:ターゲットID2:言語コード2"
-    例: "333333333333333333:222222222222222222:en"
+    フォーマット: "ソースID:ターゲットID:言語コード[:モード],..."
+    例: "333333333333333333:222222222222222222:en:trigger"
     """
     configs: dict[str, list[dict]] = {}
     if not env_str or not env_str.strip():
@@ -57,13 +57,14 @@ def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
         if not item:
             continue
         parts = item.split(":")
-        if len(parts) != 3:
+        if len(parts) < 3 or len(parts) > 4:
             logger.warning("環境変数 AUTO_TRANSLATE_PAIRS のパース失敗 (形式不正): %s", item)
             continue
 
         source_id_str = parts[0].strip()
         target_id_str = parts[1].strip()
         lang_code = parts[2].strip()
+        mode = parts[3].strip().lower() if len(parts) == 4 else "all"
 
         try:
             target_id = int(target_id_str)
@@ -82,13 +83,14 @@ def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
             "deepl_lang": lang_info.get("deepl"),
             "mymemory_lang": lang_info.get("mymemory"),
             "lang_label": lang_info.get("label"),
+            "mode": mode,
             "is_from_env": True
         }
 
         if source_id_str not in configs:
             configs[source_id_str] = []
 
-        if not any(p["target_channel_id"] == target_id for p in configs[source_id_str]):
+        if not any(p["target_channel_id"] == target_id and p.get("mode", "all") == mode for p in configs[source_id_str]):
             configs[source_id_str].append(pair_data)
 
     return configs
@@ -99,34 +101,59 @@ class AutoTranslatorCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.configs: dict[str, list[dict]] = self._load_configs()
+        self.configs: dict = self._load_configs()
 
-    def _load_configs(self) -> dict[str, list[dict]]:
-        """設定ファイルおよび環境変数 AUTO_TRANSLATE_PAIRS から設定を読み込んでマージする。"""
-        configs: dict[str, list[dict]] = {}
+    def _load_configs(self) -> dict:
+        """設定ファイルおよび環境変数から設定を読み込んで構造化する。"""
+        data = {
+            "trigger_users": ["user1"],
+            "trigger_emojis": ["🌐"],
+            "channels": {}
+        }
 
+        # 1. ローカル JSON ファイルからの読み込み
         if os.path.exists(CONFIG_PATH):
             try:
                 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                    configs = json.load(f)
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        # 旧形式データ（channel_id のみがルートキー）の判定と移行
+                        if "channels" in loaded:
+                            data["channels"] = loaded.get("channels", {})
+                            data["trigger_users"] = loaded.get("trigger_users", ["user1"])
+                            data["trigger_emojis"] = loaded.get("trigger_emojis", ["🌐"])
+                        else:
+                            data["channels"] = loaded
             except Exception as e:
                 logger.error("設定ファイルの読み込みに失敗しました: %s", e)
-                configs = {}
 
+        # 2. 環境変数 TRIGGER_USERS / TRIGGER_EMOJIS の上書き・マージ
+        env_users = os.getenv("TRIGGER_USERS", "").strip()
+        if env_users:
+            data["trigger_users"] = [u.strip() for u in env_users.split(",") if u.strip()]
+
+        env_emojis = os.getenv("TRIGGER_EMOJIS", "").strip()
+        if env_emojis:
+            data["trigger_emojis"] = [e.strip() for e in env_emojis.split(",") if e.strip()]
+
+        # 3. 環境変数 AUTO_TRANSLATE_PAIRS からのペア自動マージ
         env_str = os.getenv("AUTO_TRANSLATE_PAIRS", "").strip()
         if env_str:
-            env_configs = parse_env_pairs(env_str)
-            for s_id, pairs in env_configs.items():
-                if s_id not in configs:
-                    configs[s_id] = []
+            env_channels = parse_env_pairs(env_str)
+            for s_id, pairs in env_channels.items():
+                if s_id not in data["channels"]:
+                    data["channels"][s_id] = []
                 for env_pair in pairs:
-                    if not any(p["target_channel_id"] == env_pair["target_channel_id"] for p in configs[s_id]):
-                        configs[s_id].append(env_pair)
+                    if not any(
+                        p["target_channel_id"] == env_pair["target_channel_id"] and p.get("mode", "all") == env_pair.get("mode", "all")
+                        for p in data["channels"][s_id]
+                    ):
+                        data["channels"][s_id].append(env_pair)
 
-        return configs
+        return data
 
     def _save_configs(self) -> None:
-        """現在のチャンネル自動翻訳設定をファイルに保存する。"""
+        """現在の設定構造をファイルに保存する。"""
         try:
             os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -140,9 +167,7 @@ class AutoTranslatorCog(commands.Cog):
         target_channel: discord.TextChannel,
         scan_limit: int = 500
     ) -> set[int]:
-        """
-        転送先チャンネルの過去ログから、既に転送済みの元メッセージID集合を取得する。
-        """
+        """転送先チャンネルの過去ログから、既に転送済みの元メッセージID集合を取得する。"""
         translated_source_ids: set[int] = set()
         try:
             async for msg in target_channel.history(limit=scan_limit):
@@ -164,10 +189,7 @@ class AutoTranslatorCog(commands.Cog):
         mymemory_lang: str,
         lang_label: str
     ) -> bool:
-        """
-        メッセージを翻訳し、指定のターゲットチャンネルに Embed で送信する共通ヘルパー。
-        成功した場合 True、スキップ・失敗時 False を返す。
-        """
+        """メッセージを翻訳し、指定のターゲットチャンネルに Embed で送信する共通ヘルパー。"""
         content = message.content.strip()
         if not content:
             return False
@@ -204,7 +226,7 @@ class AutoTranslatorCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """メッセージ投稿時に自動翻訳・転送を行うリスナー。"""
+        """メッセージ投稿時に全自動翻訳 (mode == 'all') を行うリスナー。"""
 
         if message.author.bot:
             return
@@ -214,11 +236,13 @@ class AutoTranslatorCog(commands.Cog):
             return
 
         source_channel_id = str(message.channel.id)
-        if source_channel_id not in self.configs:
+        channels_config = self.configs.get("channels", {})
+        if source_channel_id not in channels_config:
             return
 
-        pairs = self.configs[source_channel_id]
-        for pair in pairs:
+        # mode == 'all' のペアのみを全自動翻訳対象とする
+        all_pairs = [p for p in channels_config[source_channel_id] if p.get("mode", "all") == "all"]
+        for pair in all_pairs:
             target_channel_id = pair["target_channel_id"]
             deepl_lang = pair.get("deepl_lang")
             mymemory_lang = pair.get("mymemory_lang")
@@ -240,11 +264,142 @@ class AutoTranslatorCog(commands.Cog):
                 lang_label=lang_label
             )
 
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        """
+        リアクション追加時に特定ユーザー(User1)＆特定スタンプでトリガー翻訳 (mode == 'trigger') を行うリスナー。
+        【解決策A】発言者本人かつリアクション実行者が対象ユーザーに含まれること。
+        """
+
+        if payload.user_id == self.bot.user.id:
+            return
+
+        emoji_str = str(payload.emoji)
+        trigger_emojis = self.configs.get("trigger_emojis", ["🌐"])
+        if emoji_str not in trigger_emojis:
+            return
+
+        source_channel_id = str(payload.channel_id)
+        channels_config = self.configs.get("channels", {})
+        if source_channel_id not in channels_config:
+            return
+
+        trigger_pairs = [p for p in channels_config[source_channel_id] if p.get("mode") == "trigger"]
+        if not trigger_pairs:
+            return
+
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(payload.channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return
+
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return
+
+        if message.author.bot:
+            return
+
+        trigger_users = self.configs.get("trigger_users", ["user1"])
+
+        # 1. メッセージ発言者の検証
+        author_match = (
+            str(message.author.id) in trigger_users
+            or message.author.name.lower() in [u.lower() for u in trigger_users]
+            or message.author.display_name.lower() in [u.lower() for u in trigger_users]
+        )
+        if not author_match:
+            return
+
+        # 2. リアクション実行者の検証 (解決策A: 押した人自身も特定ユーザーであること)
+        reactor = payload.member
+        if reactor is None:
+            try:
+                reactor = await self.bot.fetch_user(payload.user_id)
+            except discord.HTTPException:
+                return
+
+        reactor_match = (
+            str(reactor.id) in trigger_users
+            or reactor.name.lower() in [u.lower() for u in trigger_users]
+            or (hasattr(reactor, "display_name") and reactor.display_name.lower() in [u.lower() for u in trigger_users])
+        )
+        if not reactor_match:
+            logger.debug("リアクション実行者 (%s) がトリガー対象外ユーザーのためスキップ", reactor)
+            return
+
+        # 3. 転送先へ一括翻訳投稿
+        for pair in trigger_pairs:
+            target_channel_id = pair["target_channel_id"]
+            deepl_lang = pair.get("deepl_lang")
+            mymemory_lang = pair.get("mymemory_lang")
+            lang_label = pair.get("lang_label", "Unknown")
+
+            target_channel = self.bot.get_channel(target_channel_id)
+            if target_channel is None:
+                try:
+                    target_channel = await self.bot.fetch_channel(target_channel_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    continue
+
+            # 二重投稿の自動判定
+            already_ids = await self._get_already_translated_source_ids(target_channel, scan_limit=200)
+            if message.id in already_ids:
+                logger.debug("既に転送先に存在するメッセージのためスキップ: msg_id=%s", message.id)
+                continue
+
+            await self._send_translated_embed(
+                message=message,
+                target_channel=target_channel,
+                deepl_lang=deepl_lang,
+                mymemory_lang=mymemory_lang,
+                lang_label=lang_label
+            )
+
     @commands.group(name="auto_translate", aliases=["at"], invoke_without_command=True)
     @commands.has_permissions(manage_channels=True)
     async def auto_translate(self, ctx: commands.Context):
         """チャンネル自動翻訳コマンドのルートグループ。"""
         await ctx.send_help(ctx.command)
+
+    def _add_pair_internal(
+        self,
+        source_channel: discord.TextChannel,
+        target_channel: discord.TextChannel,
+        lang_info: dict,
+        lang_code: str,
+        mode: str
+    ):
+        source_id = str(source_channel.id)
+        new_pair = {
+            "target_channel_id": target_channel.id,
+            "target_lang_code": lang_code.lower(),
+            "deepl_lang": lang_info.get("deepl"),
+            "mymemory_lang": lang_info.get("mymemory"),
+            "lang_label": lang_info.get("label"),
+            "mode": mode
+        }
+
+        if "channels" not in self.configs:
+            self.configs["channels"] = {}
+
+        if source_id not in self.configs["channels"]:
+            self.configs["channels"][source_id] = []
+
+        updated = False
+        for i, pair in enumerate(self.configs["channels"][source_id]):
+            if pair["target_channel_id"] == target_channel.id and pair.get("mode", "all") == mode:
+                self.configs["channels"][source_id][i] = new_pair
+                updated = True
+                break
+
+        if not updated:
+            self.configs["channels"][source_id].append(new_pair)
+
+        self._save_configs()
 
     @auto_translate.command(name="add")
     @commands.has_permissions(manage_channels=True)
@@ -255,49 +410,165 @@ class AutoTranslatorCog(commands.Cog):
         target_channel: discord.TextChannel,
         lang_code: str
     ):
-        """
-        自動翻訳ペアを追加・更新します。
-        使用例: !auto_translate add #japanese-chat #english-chat en
-        """
+        """全発言全自動翻訳ペアを追加します。"""
         lang_info = get_lang_info_by_code(lang_code)
         if not lang_info:
-            await ctx.send(
-                f"❌ 指定された言語コード `{lang_code}` が見つかりません。\n"
-                f"例: `en` (英語), `ja` (日本語), `zh` (中国語), `ko` (韓国語), `fr` (フランス語), `es` (スペイン語) など指定してください。"
-            )
+            await ctx.send(f"❌ 指定された言語コード `{lang_code}` が見つかりません。")
             return
 
-        source_id = str(source_channel.id)
-        new_pair = {
-            "target_channel_id": target_channel.id,
-            "target_lang_code": lang_code.lower(),
-            "deepl_lang": lang_info.get("deepl"),
-            "mymemory_lang": lang_info.get("mymemory"),
-            "lang_label": lang_info.get("label"),
-        }
-
-        if source_id not in self.configs:
-            self.configs[source_id] = []
-
-        updated = False
-        for i, pair in enumerate(self.configs[source_id]):
-            if pair["target_channel_id"] == target_channel.id:
-                self.configs[source_id][i] = new_pair
-                updated = True
-                break
-
-        if not updated:
-            self.configs[source_id].append(new_pair)
-
-        self._save_configs()
-
+        self._add_pair_internal(source_channel, target_channel, lang_info, lang_code, mode="all")
         await ctx.send(
-            f"✅ 自動翻訳ペアを設定しました！\n"
+            f"✅ **全自動翻訳ペア**を設定しました！\n"
             f"• 転送元: {source_channel.mention}\n"
             f"• 転送先: {target_channel.mention}\n"
-            f"• 翻訳先言語: **{lang_info['label']}** (`{lang_code}`)\n"
-            f"💡 コンテナ再起動後も永続化するには `!auto_translate env_export` で環境変数用テキストを取得できます。"
+            f"• 言語: **{lang_info['label']}** (`{lang_code}`)\n"
+            f"• モード: **全自動翻訳 (全発言対象)**"
         )
+
+    @auto_translate.command(name="add_trigger")
+    @commands.has_permissions(manage_channels=True)
+    async def add_trigger_pair(
+        self,
+        ctx: commands.Context,
+        source_channel: discord.TextChannel,
+        target_channel: discord.TextChannel,
+        lang_code: str
+    ):
+        """特定ユーザー＋特定スタンプトリガー専用の翻訳ペアを追加します。"""
+        lang_info = get_lang_info_by_code(lang_code)
+        if not lang_info:
+            await ctx.send(f"❌ 指定された言語コード `{lang_code}` が見つかりません。")
+            return
+
+        self._add_pair_internal(source_channel, target_channel, lang_info, lang_code, mode="trigger")
+        trigger_users = ", ".join(self.configs.get("trigger_users", ["user1"]))
+        trigger_emojis = " ".join(self.configs.get("trigger_emojis", ["🌐"]))
+
+        await ctx.send(
+            f"✅ **トリガー限定翻訳ペア**を設定しました！\n"
+            f"• 転送元: {source_channel.mention}\n"
+            f"• 転送先: {target_channel.mention}\n"
+            f"• 言語: **{lang_info['label']}** (`{lang_code}`)\n"
+            f"• 対象ユーザー: **{trigger_users}**\n"
+            f"• トリガースタンプ: {trigger_emojis}\n"
+            f"💡 対象ユーザーが発言し、指定スタンプが押された時のみ翻訳転送されます。"
+        )
+
+    # ── トリガーユーザー管理グループ ──
+    @auto_translate.group(name="trigger_user", invoke_without_command=True)
+    @commands.has_permissions(manage_channels=True)
+    async def trigger_user_group(self, ctx: commands.Context):
+        """トリガー対象ユーザー管理コマンド。"""
+        await ctx.send_help(ctx.command)
+
+    @trigger_user_group.command(name="add")
+    @commands.has_permissions(manage_channels=True)
+    async def add_trigger_user(self, ctx: commands.Context, username_or_id: str):
+        """トリガー対象ユーザーを追加します。"""
+        users = self.configs.get("trigger_users", ["user1"])
+        if username_or_id not in users:
+            users.append(username_or_id)
+            self.configs["trigger_users"] = users
+            self._save_configs()
+            await ctx.send(f"✅ トリガー対象ユーザーに `{username_or_id}` を追加しました。")
+        else:
+            await ctx.send(f"ℹ️ `{username_or_id}` は既にトリガー対象に登録されています。")
+
+    @trigger_user_group.command(name="remove")
+    @commands.has_permissions(manage_channels=True)
+    async def remove_trigger_user(self, ctx: commands.Context, username_or_id: str):
+        """トリガー対象ユーザーを削除します。"""
+        users = self.configs.get("trigger_users", ["user1"])
+        if username_or_id in users:
+            users.remove(username_or_id)
+            self.configs["trigger_users"] = users
+            self._save_configs()
+            await ctx.send(f"✅ トリガー対象ユーザーから `{username_or_id}` を削除しました。")
+        else:
+            await ctx.send(f"⚠️ `{username_or_id}` はトリガー対象に登録されていません。")
+
+    @trigger_user_group.command(name="list")
+    @commands.has_permissions(manage_channels=True)
+    async def list_trigger_users(self, ctx: commands.Context):
+        """トリガー対象ユーザー一覧を表示します。"""
+        users = self.configs.get("trigger_users", ["user1"])
+        await ctx.send(f"👤 **現在のトリガー対象ユーザー**: {', '.join(users) if users else 'なし'}")
+
+    # ── トリガースタンプ管理グループ ──
+    @auto_translate.group(name="trigger_emoji", invoke_without_command=True)
+    @commands.has_permissions(manage_channels=True)
+    async def trigger_emoji_group(self, ctx: commands.Context):
+        """トリガースタンプ（絵文字）管理コマンド。"""
+        await ctx.send_help(ctx.command)
+
+    @trigger_emoji_group.command(name="add")
+    @commands.has_permissions(manage_channels=True)
+    async def add_trigger_emoji(self, ctx: commands.Context, emoji: str):
+        """トリガースタンプ（絵文字）を追加します。"""
+        emojis = self.configs.get("trigger_emojis", ["🌐"])
+        if emoji not in emojis:
+            emojis.append(emoji)
+            self.configs["trigger_emojis"] = emojis
+            self._save_configs()
+            await ctx.send(f"✅ トリガースタンプに {emoji} を追加しました。")
+        else:
+            await ctx.send(f"ℹ️ {emoji} は既に登録されています。")
+
+    @trigger_emoji_group.command(name="remove")
+    @commands.has_permissions(manage_channels=True)
+    async def remove_trigger_emoji(self, ctx: commands.Context, emoji: str):
+        """トリガースタンプ（絵文字）を削除します。"""
+        emojis = self.configs.get("trigger_emojis", ["🌐"])
+        if emoji in emojis:
+            emojis.remove(emoji)
+            self.configs["trigger_emojis"] = emojis
+            self._save_configs()
+            await ctx.send(f"✅ トリガースタンプから {emoji} を削除しました。")
+        else:
+            await ctx.send(f"⚠️ {emoji} は登録されていません。")
+
+    @trigger_emoji_group.command(name="list")
+    @commands.has_permissions(manage_channels=True)
+    async def list_trigger_emojis(self, ctx: commands.Context):
+        """トリガースタンプ一覧を表示します。"""
+        emojis = self.configs.get("trigger_emojis", ["🌐"])
+        await ctx.send(f"🎨 **現在のトリガースタンプ**: {' '.join(emojis) if emojis else 'なし'}")
+
+    @auto_translate.command(name="trigger_info")
+    @commands.has_permissions(manage_channels=True)
+    async def trigger_info(self, ctx: commands.Context):
+        """トリガー翻訳設定の総合情報を表示します。"""
+        users = ", ".join(self.configs.get("trigger_users", ["user1"]))
+        emojis = " ".join(self.configs.get("trigger_emojis", ["🌐"]))
+
+        embed = discord.Embed(
+            title="⚙️ トリガー自動翻訳 設定情報",
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="👤 対象ユーザー", value=users or "なし", inline=False)
+        embed.add_field(name="🎨 トリガースタンプ", value=emojis or "なし", inline=False)
+
+        channels_config = self.configs.get("channels", {})
+        count = 0
+        for s_id, pairs in channels_config.items():
+            s_chan = self.bot.get_channel(int(s_id))
+            s_name = s_chan.mention if s_chan else f"ID: {s_id}"
+
+            for pair in pairs:
+                if pair.get("mode") == "trigger":
+                    t_chan = self.bot.get_channel(pair["target_channel_id"])
+                    t_name = t_chan.mention if t_chan else f"ID: {pair['target_channel_id']}"
+                    embed.add_field(
+                        name=f"Trigger Pair #{count + 1}",
+                        value=f"• **転送元**: {s_name}\n• **転送先**: {t_name}\n• **言語**: {pair.get('lang_label')}",
+                        inline=False
+                    )
+                    count += 1
+
+        if count == 0:
+            embed.add_field(name="🌐 トリガーペア", value="登録されているトリガー限定ペアはありません。", inline=False)
+
+        await ctx.send(embed=embed)
 
     @auto_translate.command(name="backfill")
     @commands.has_permissions(manage_channels=True)
@@ -310,17 +581,10 @@ class AutoTranslatorCog(commands.Cog):
         limit: int = 100,
         after_message_id: Optional[int] = None
     ):
-        """
-        過去ログを古い順から一括で翻訳・転送します（重複自動スキップ機能付き）。
-        使用例:
-          !auto_translate backfill #japanese-chat #english-chat en 50
-          !auto_translate backfill #japanese-chat #english-chat en 100 123456789012345678
-        """
+        """過去ログを古い順から一括で翻訳・転送します（重複自動スキップ機能付き）。"""
         lang_info = get_lang_info_by_code(lang_code)
         if not lang_info:
-            await ctx.send(
-                f"❌ 指定された言語コード `{lang_code}` が見つかりません。"
-            )
+            await ctx.send(f"❌ 指定された言語コード `{lang_code}` が見つかりません。")
             return
 
         if limit < 1 or limit > 1000:
@@ -332,17 +596,14 @@ class AutoTranslatorCog(commands.Cog):
             try:
                 after_msg = await source_channel.fetch_message(after_message_id)
             except discord.NotFound:
-                await ctx.send(f"❌ 指定された開始メッセージID `{after_message_id}` が転送元チャンネルで見つかりませんでした。")
+                await ctx.send(f"❌ 指定された開始メッセージID `{after_message_id}` が見つかりませんでした。")
                 return
             except (discord.Forbidden, discord.HTTPException) as e:
                 await ctx.send(f"❌ メッセージの取得に失敗しました: {e}")
                 return
 
-        status_msg = await ctx.send(
-            f"🔄 転送先チャンネルの既存ログをスキャン中..."
-        )
+        status_msg = await ctx.send("🔄 転送先チャンネルの既存ログをスキャン中...")
 
-        # 既転送済みメッセージID集合の自動取得
         already_translated_ids = await self._get_already_translated_source_ids(target_channel)
 
         after_info = f" (メッセージID: `{after_message_id}` の直後から)" if after_message_id else ""
@@ -376,7 +637,6 @@ class AutoTranslatorCog(commands.Cog):
             if msg_ctx.valid:
                 continue
 
-            # 二重投稿の自動判定・スキップ
             if message.id in already_translated_ids:
                 skipped_duplicate_count += 1
                 continue
@@ -412,28 +672,26 @@ class AutoTranslatorCog(commands.Cog):
         source_channel: discord.TextChannel,
         target_channel: Optional[discord.TextChannel] = None
     ):
-        """
-        自動翻訳ペアを削除します。
-        使用例: !auto_translate remove #japanese-chat [#english-chat]
-        """
+        """自動翻訳ペアを削除します。"""
         source_id = str(source_channel.id)
-        if source_id not in self.configs or not self.configs[source_id]:
+        channels_config = self.configs.get("channels", {})
+        if source_id not in channels_config or not channels_config[source_id]:
             await ctx.send(f"⚠️ {source_channel.mention} には自動翻訳設定がありません。")
             return
 
         if target_channel is None:
-            del self.configs[source_id]
+            del channels_config[source_id]
             self._save_configs()
             await ctx.send(f"✅ {source_channel.mention} からの自動翻訳設定をすべて削除しました。")
         else:
-            original_len = len(self.configs[source_id])
-            self.configs[source_id] = [
-                p for p in self.configs[source_id] if p["target_channel_id"] != target_channel.id
+            original_len = len(channels_config[source_id])
+            channels_config[source_id] = [
+                p for p in channels_config[source_id] if p["target_channel_id"] != target_channel.id
             ]
-            if len(self.configs[source_id]) == 0:
-                del self.configs[source_id]
+            if len(channels_config[source_id]) == 0:
+                del channels_config[source_id]
 
-            if len(self.configs.get(source_id, [])) < original_len:
+            if len(channels_config.get(source_id, [])) < original_len:
                 self._save_configs()
                 await ctx.send(
                     f"✅ {source_channel.mention} → {target_channel.mention} の自動翻訳設定を削除しました。"
@@ -447,7 +705,8 @@ class AutoTranslatorCog(commands.Cog):
     @commands.has_permissions(manage_channels=True)
     async def list_pairs(self, ctx: commands.Context):
         """設定中の自動翻訳ペア一覧を表示します。"""
-        if not self.configs:
+        channels_config = self.configs.get("channels", {})
+        if not channels_config:
             await ctx.send("ℹ️ 現在設定されている自動翻訳ペアはありません。")
             return
 
@@ -457,7 +716,7 @@ class AutoTranslatorCog(commands.Cog):
         )
 
         count = 0
-        for source_id, pairs in self.configs.items():
+        for source_id, pairs in channels_config.items():
             source_chan = self.bot.get_channel(int(source_id))
             source_name = source_chan.mention if source_chan else f"ID: {source_id}"
 
@@ -465,10 +724,11 @@ class AutoTranslatorCog(commands.Cog):
                 target_chan = self.bot.get_channel(pair["target_channel_id"])
                 target_name = target_chan.mention if target_chan else f"ID: {pair['target_channel_id']}"
                 lang_label = pair.get("lang_label", "Unknown")
-                from_env = " (環境変数)" if pair.get("is_from_env") else ""
+                mode_str = " (トリガー限定)" if pair.get("mode") == "trigger" else " (全自動)"
+                from_env = " [環境変数]" if pair.get("is_from_env") else ""
 
                 embed.add_field(
-                    name=f"Pair #{count + 1}{from_env}",
+                    name=f"Pair #{count + 1}{mode_str}{from_env}",
                     value=f"• **転送元**: {source_name}\n• **転送先**: {target_name}\n• **言語**: {lang_label}",
                     inline=False
                 )
@@ -482,31 +742,38 @@ class AutoTranslatorCog(commands.Cog):
     @auto_translate.command(name="env_export")
     @commands.has_permissions(manage_channels=True)
     async def env_export(self, ctx: commands.Context):
-        """現在のペア設定を環境変数 AUTO_TRANSLATE_PAIRS 用のフォーマットテキストとして出力します。"""
-        if not self.configs:
-            await ctx.send("ℹ️ 現在設定されている自動翻訳ペアはありません。")
-            return
-
+        """現在の全ペア設定およびトリガー設定を環境変数用のテキスト形式で出力します。"""
+        channels_config = self.configs.get("channels", {})
         export_items = []
-        for source_id, pairs in self.configs.items():
+        for source_id, pairs in channels_config.items():
             for pair in pairs:
                 target_id = pair["target_channel_id"]
                 lang_code = pair.get("target_lang_code", "en")
-                export_items.append(f"{source_id}:{target_id}:{lang_code}")
+                mode = pair.get("mode", "all")
+                export_items.append(f"{source_id}:{target_id}:{lang_code}:{mode}")
 
-        env_val = ",".join(export_items)
+        env_pairs_val = ",".join(export_items)
+        users_val = ",".join(self.configs.get("trigger_users", ["user1"]))
+        emojis_val = ",".join(self.configs.get("trigger_emojis", ["🌐"]))
+
         out_msg = (
             f"📋 **環境変数設定用テキスト**:\n"
-            f"```env\nAUTO_TRANSLATE_PAIRS=\"{env_val}\"\n```\n"
-            f"💡 上記を GCP Secret Manager や Cloud Run の環境変数 `AUTO_TRANSLATE_PAIRS` に登録しておくと、コンテナ再起動後も永久に自動翻訳設定が維持されます。"
+            f"```env\n"
+            f"AUTO_TRANSLATE_PAIRS=\"{env_pairs_val}\"\n"
+            f"TRIGGER_USERS=\"{users_val}\"\n"
+            f"TRIGGER_EMOJIS=\"{emojis_val}\"\n"
+            f"```\n"
+            f"💡 上記を GCP Secret Manager に登録しておくと、コンテナ再起動後も永久に設定が維持されます。"
         )
         await ctx.send(out_msg)
 
     @add_pair.error
+    @add_trigger_pair.error
     @backfill_messages.error
     @remove_pair.error
     @auto_translate.error
     @env_export.error
+    @trigger_info.error
     async def auto_translate_cmd_error(self, ctx: commands.Context, error: commands.CommandError):
         """自動翻訳コマンド群のエラーハンドラ"""
         logger.info("自動翻訳コマンドエラー発生: user=%s, command=%s, error=%s", ctx.author, ctx.command, error)
@@ -515,26 +782,18 @@ class AutoTranslatorCog(commands.Cog):
             error = error.original
 
         if isinstance(error, commands.MissingPermissions):
-            await ctx.send(
-                f"🚫 **権限エラー**: このコマンドを実行するには「チャンネルの管理 (Manage Channels)」権限が必要です。"
-            )
+            await ctx.send("🚫 **権限エラー**: このコマンドを実行するには「チャンネルの管理 (Manage Channels)」権限が必要です。")
         elif isinstance(error, commands.ChannelNotFound):
             await ctx.send(
                 f"❌ チャンネル `{error.argument}` が見つかりませんでした。\n"
                 f"💡 **指定方法のヒント**:\n"
                 f"• `#` を入力してメニューから選択する **チャンネルメンション**（例: `#チャンネル名`）を指定してください。\n"
-                f"• または、チャンネルを右クリックしてコピーできる **18桁のチャンネルID** を直接入力してください。"
+                f"• または、18桁のチャンネルIDを直接入力してください。"
             )
         elif isinstance(error, commands.BadArgument):
-            await ctx.send(
-                f"❌ 入力されたパラメータの形式が正しくありません。\n"
-                f"💡 使用例: `!auto_translate backfill #転送元 #転送先 ja 100 [開始メッセージID]`"
-            )
+            await ctx.send("❌ 入力されたパラメータの形式が正しくありません。使用例を確認してください。")
         elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(
-                f"❌ パラメータが足りません: `{error.param.name}`\n"
-                f"💡 使用例: `!auto_translate backfill #転送元 #転送先 ja 100 [開始メッセージID]`"
-            )
+            await ctx.send(f"❌ パラメータが足りません: `{error.param.name}`")
         else:
             await ctx.send(f"❌ コマンド実行中にエラーが発生しました: `{error}`")
 
