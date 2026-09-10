@@ -101,6 +101,12 @@ gcloud builds submit . \
 
 # ── 3. Cloud Run へデプロイ ──
 echo "▶ Cloud Run へデプロイ..."
+SECRETS_SET="DISCORD_TOKEN=${SECRET_PREFIX}DISCORD_TOKEN:latest,DEEPL_API_KEY=${SECRET_PREFIX}DEEPL_API_KEY:latest"
+if gcloud secrets describe "${SECRET_PREFIX}AUTO_TRANSLATE_PAIRS" --project="$PROJECT_ID" &>/dev/null; then
+  echo "  Secret ${SECRET_PREFIX}AUTO_TRANSLATE_PAIRS も読み込みます..."
+  SECRETS_SET="${SECRETS_SET},AUTO_TRANSLATE_PAIRS=${SECRET_PREFIX}AUTO_TRANSLATE_PAIRS:latest"
+fi
+
 gcloud run deploy "$SERVICE_NAME" \
   --project="$PROJECT_ID" \
   --region="$REGION" \
@@ -114,8 +120,9 @@ gcloud run deploy "$SERVICE_NAME" \
   --cpu=1 \
   --memory=512Mi \
   --timeout=3600 \
-  --set-secrets="DISCORD_TOKEN=${SECRET_PREFIX}DISCORD_TOKEN:latest,DEEPL_API_KEY=${SECRET_PREFIX}DEEPL_API_KEY:latest" \
+  --set-secrets="$SECRETS_SET" \
   --set-env-vars="MYMEMORY_EMAIL=$(grep '^MYMEMORY_EMAIL=' .env 2>/dev/null | cut -d'=' -f2- || echo '')"
+
 
 echo ""
 echo "✅ デプロイ完了！"
