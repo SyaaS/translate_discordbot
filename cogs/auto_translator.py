@@ -1,5 +1,5 @@
 """
-AutoTranslatorCog: チャンネル間自動翻訳転送機能（リアルタイム＆バックフィル対応）
+AutoTranslatorCog: チャンネル間自動翻訳転送機能（リアルタイム＆バックフィル＆環境変数永続化対応）
 """
 
 from __future__ import annotations
@@ -21,6 +21,59 @@ logger = logging.getLogger(__name__)
 CONFIG_PATH = os.path.join("data", "channel_config.json")
 
 
+def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
+    """
+    環境変数 AUTO_TRANSLATE_PAIRS 文字列をパースする。
+    フォーマット: "ソースID:ターゲットID:言語コード,ソースID2:ターゲットID2:言語コード2"
+    例: "333333333333333333:222222222222222222:en"
+    """
+    configs: dict[str, list[dict]] = {}
+    if not env_str or not env_str.strip():
+        return configs
+
+    raw_items = env_str.split(",")
+    for item in raw_items:
+        item = item.strip()
+        if not item:
+            continue
+        parts = item.split(":")
+        if len(parts) != 3:
+            logger.warning("環境変数 AUTO_TRANSLATE_PAIRS のパース失敗 (形式不正): %s", item)
+            continue
+
+        source_id_str = parts[0].strip()
+        target_id_str = parts[1].strip()
+        lang_code = parts[2].strip()
+
+        try:
+            target_id = int(target_id_str)
+        except ValueError:
+            logger.warning("環境変数 AUTO_TRANSLATE_PAIRS のターゲットID不正: %s", target_id_str)
+            continue
+
+        lang_info = get_lang_info_by_code(lang_code)
+        if not lang_info:
+            logger.warning("環境変数 AUTO_TRANSLATE_PAIRS の言語コード不正: %s", lang_code)
+            continue
+
+        pair_data = {
+            "target_channel_id": target_id,
+            "target_lang_code": lang_code.lower(),
+            "deepl_lang": lang_info.get("deepl"),
+            "mymemory_lang": lang_info.get("mymemory"),
+            "lang_label": lang_info.get("label"),
+            "is_from_env": True
+        }
+
+        if source_id_str not in configs:
+            configs[source_id_str] = []
+
+        if not any(p["target_channel_id"] == target_id for p in configs[source_id_str]):
+            configs[source_id_str].append(pair_data)
+
+    return configs
+
+
 class AutoTranslatorCog(commands.Cog):
     """指定したチャンネルの投稿を自動で翻訳して別チャンネルへ転送するコグ。"""
 
@@ -29,19 +82,31 @@ class AutoTranslatorCog(commands.Cog):
         self.configs: dict[str, list[dict]] = self._load_configs()
 
     def _load_configs(self) -> dict[str, list[dict]]:
-        """設定ファイルからチャンネル自動翻訳設定を読み込む。"""
-        if not os.path.exists(CONFIG_PATH):
-            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump({}, f)
-            return {}
+        """設定ファイルおよび環境変数 AUTO_TRANSLATE_PAIRS から設定を読み込んでマージする。"""
+        configs: dict[str, list[dict]] = {}
 
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error("設定ファイルの読み込みに失敗しました: %s", e)
-            return {}
+        # 1. ローカル JSON ファイルからの読み込み
+        if os.path.exists(CONFIG_PATH):
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    configs = json.load(f)
+            except Exception as e:
+                logger.error("設定ファイルの読み込みに失敗しました: %s", e)
+                configs = {}
+
+        # 2. 環境変数からの自動パースとマージ
+        env_str = os.getenv("AUTO_TRANSLATE_PAIRS", "").strip()
+        if env_str:
+            env_configs = parse_env_pairs(env_str)
+            for s_id, pairs in env_configs.items():
+                if s_id not in configs:
+                    configs[s_id] = []
+                for env_pair in pairs:
+                    # 既に同じターゲットIDの設定が存在しない場合のみ追加
+                    if not any(p["target_channel_id"] == env_pair["target_channel_id"] for p in configs[s_id]):
+                        configs[s_id].append(env_pair)
+
+        return configs
 
     def _save_configs(self) -> None:
         """現在のチャンネル自動翻訳設定をファイルに保存する。"""
@@ -104,11 +169,9 @@ class AutoTranslatorCog(commands.Cog):
     async def on_message(self, message: discord.Message):
         """メッセージ投稿時に自動翻訳・転送を行うリスナー。"""
 
-        # ボット自身の発言や他のボットの発言は無視
         if message.author.bot:
             return
 
-        # コマンド判定（プレフィックスで始まるメッセージは無視）
         ctx = await self.bot.get_context(message)
         if ctx.valid:
             return
@@ -195,7 +258,8 @@ class AutoTranslatorCog(commands.Cog):
             f"✅ 自動翻訳ペアを設定しました！\n"
             f"• 転送元: {source_channel.mention}\n"
             f"• 転送先: {target_channel.mention}\n"
-            f"• 翻訳先言語: **{lang_info['label']}** (`{lang_code}`)"
+            f"• 翻訳先言語: **{lang_info['label']}** (`{lang_code}`)\n"
+            f"💡 コンテナ再起動後も永続化するには `!auto_translate env_export` で環境変数用テキストを取得できます。"
         )
 
     @auto_translate.command(name="backfill")
@@ -236,7 +300,6 @@ class AutoTranslatorCog(commands.Cog):
         translated_count = 0
 
         async for message in source_channel.history(limit=limit, oldest_first=True):
-            # Bot の発言や空テキスト、コマンド判定メッセージはスキップ
             if message.author.bot or not message.content.strip():
                 continue
 
@@ -255,7 +318,6 @@ class AutoTranslatorCog(commands.Cog):
 
             if success:
                 translated_count += 1
-                # レート制限防止のため 1.2 秒インターバル
                 await asyncio.sleep(1.2)
 
         await status_msg.edit(
@@ -328,9 +390,10 @@ class AutoTranslatorCog(commands.Cog):
                 target_chan = self.bot.get_channel(pair["target_channel_id"])
                 target_name = target_chan.mention if target_chan else f"ID: {pair['target_channel_id']}"
                 lang_label = pair.get("lang_label", "Unknown")
+                from_env = " (環境変数)" if pair.get("is_from_env") else ""
 
                 embed.add_field(
-                    name=f"Pair #{count + 1}",
+                    name=f"Pair #{count + 1}{from_env}",
                     value=f"• **転送元**: {source_name}\n• **転送先**: {target_name}\n• **言語**: {lang_label}",
                     inline=False
                 )
@@ -341,15 +404,38 @@ class AutoTranslatorCog(commands.Cog):
         else:
             await ctx.send(embed=embed)
 
+    @auto_translate.command(name="env_export")
+    @commands.has_permissions(manage_channels=True)
+    async def env_export(self, ctx: commands.Context):
+        """現在のペア設定を環境変数 AUTO_TRANSLATE_PAIRS 用のフォーマットテキストとして出力します。"""
+        if not self.configs:
+            await ctx.send("ℹ️ 現在設定されている自動翻訳ペアはありません。")
+            return
+
+        export_items = []
+        for source_id, pairs in self.configs.items():
+            for pair in pairs:
+                target_id = pair["target_channel_id"]
+                lang_code = pair.get("target_lang_code", "en")
+                export_items.append(f"{source_id}:{target_id}:{lang_code}")
+
+        env_val = ",".join(export_items)
+        out_msg = (
+            f"📋 **環境変数設定用テキスト**:\n"
+            f"```env\nAUTO_TRANSLATE_PAIRS=\"{env_val}\"\n```\n"
+            f"💡 上記を GCP Secret Manager や Cloud Run の環境変数 `AUTO_TRANSLATE_PAIRS` に登録しておくと、コンテナ再起動後も永久に自動翻訳設定が維持されます。"
+        )
+        await ctx.send(out_msg)
+
     @add_pair.error
     @backfill_messages.error
     @remove_pair.error
     @auto_translate.error
+    @env_export.error
     async def auto_translate_cmd_error(self, ctx: commands.Context, error: commands.CommandError):
         """自動翻訳コマンド群のエラーハンドラ"""
         logger.info("自動翻訳コマンドエラー発生: user=%s, command=%s, error=%s", ctx.author, ctx.command, error)
 
-        # Unwrap CommandInvokeError
         if isinstance(error, commands.CommandInvokeError):
             error = error.original
 
@@ -378,7 +464,5 @@ class AutoTranslatorCog(commands.Cog):
             await ctx.send(f"❌ コマンド実行中にエラーが発生しました: `{error}`")
 
 
-
 async def setup(bot: commands.Bot):
     await bot.add_cog(AutoTranslatorCog(bot))
-
