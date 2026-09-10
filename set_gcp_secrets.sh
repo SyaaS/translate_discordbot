@@ -81,6 +81,15 @@ while IFS='=' read -r key value; do
       --project="$PROJECT_ID" \
       --data-file=- \
       --replication-policy="automatic"
+
+    # Cloud Run デフォルト サービスアカウントへのアクセス権限付与
+    project_num="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)' 2>/dev/null || true)"
+    if [ -n "$project_num" ]; then
+      gcloud secrets add-iam-policy-binding "$secret_name" \
+        --member="serviceAccount:${project_num}-compute@developer.gserviceaccount.com" \
+        --role="roles/secretmanager.secretAccessor" \
+        --project="$PROJECT_ID" &>/dev/null || true
+    fi
   else
     echo "  更新: $secret_name"
     echo -n "$value" | gcloud secrets versions add "$secret_name" \
