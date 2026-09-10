@@ -315,7 +315,12 @@ class AutoTranslatorCog(commands.Cog):
         for pair in all_trigger_pairs:
             pair_emoji = pair.get("emoji")
             if pair_emoji:
-                if emoji_str == pair_emoji:
+                is_match = (
+                    emoji_str == pair_emoji
+                    or (payload.emoji.id and str(payload.emoji.id) in pair_emoji)
+                    or (payload.emoji.name and payload.emoji.name == pair_emoji)
+                )
+                if is_match:
                     matching_pairs.append(pair)
             else:
                 if emoji_str in global_trigger_emojis:
