@@ -52,8 +52,8 @@ def clean_str(val: Optional[str]) -> Optional[str]:
 def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
     """
     環境変数 AUTO_TRANSLATE_PAIRS 文字列をパースする。
-    フォーマット: "ソースID:ターゲットID:言語コード[:モード][:絵文字][:ユーザー1;ユーザー2],..."
-    例: "333333333333333333:222222222222222222:en:trigger:<:translate_en:1234>:user1"
+    フォーマット: "ソースID:ターゲットID:言語コード[:モード][:絵文字][:ユーザー1;ユーザー2][:元言語制限],..."
+    例: "333333333333333333:222222222222222222:en:trigger:<:translate_en:1234>:user1:ja"
     """
     configs: dict[str, list[dict]] = {}
     env_str_clean = clean_str(env_str)
@@ -81,6 +81,7 @@ def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
 
         emoji = None
         target_users = None
+        source_lang_limit = None
 
         if len(parts) >= 5 and parts[4]:
             rest = parts[4].strip(" \t\n\r\"'")
@@ -88,20 +89,24 @@ def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
                 idx = rest.find(">")
                 if idx != -1:
                     emoji = clean_str(rest[:idx + 1])
-                    users_str = clean_str(rest[idx + 1:].lstrip(":"))
+                    rem = clean_str(rest[idx + 1:].lstrip(":"))
+                    if rem:
+                        if ":" in rem:
+                            u_str, s_str = rem.split(":", 1)
+                            target_users = [u for u in [clean_str(x) for x in u_str.split(";")] if u] or None
+                            source_lang_limit = clean_str(s_str)
+                        else:
+                            target_users = [u for u in [clean_str(x) for x in rem.split(";")] if u] or None
                 else:
                     emoji = clean_str(rest)
-                    users_str = None
-            elif ":" in rest:
-                e_part, u_part = rest.split(":", 1)
-                emoji = clean_str(e_part)
-                users_str = clean_str(u_part)
             else:
-                emoji = clean_str(rest)
-                users_str = None
-
-            if users_str:
-                target_users = [u for u in [clean_str(x) for x in users_str.split(";")] if u]
+                subparts = rest.split(":")
+                if len(subparts) >= 1 and subparts[0].strip():
+                    emoji = clean_str(subparts[0])
+                if len(subparts) >= 2 and subparts[1].strip():
+                    target_users = [u for u in [clean_str(x) for x in subparts[1].split(";")] if u] or None
+                if len(subparts) >= 3 and subparts[2].strip():
+                    source_lang_limit = clean_str(subparts[2])
 
         try:
             target_id = int(re.sub(r"\D", "", target_id_str))
@@ -124,6 +129,7 @@ def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
             "mode": mode,
             "emoji": emoji,
             "target_users": target_users,
+            "source_lang_limit": source_lang_limit,
             "is_from_env": True
         }
 
@@ -135,6 +141,7 @@ def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
             and p.get("mode", "all") == mode 
             and p.get("emoji") == emoji
             and p.get("target_users") == target_users
+            and p.get("source_lang_limit") == source_lang_limit
             for p in configs[source_id_clean]
         ):
             configs[source_id_clean].append(pair_data)
@@ -199,6 +206,7 @@ class AutoTranslatorCog(commands.Cog):
                         and p.get("mode", "all") == env_pair.get("mode", "all")
                         and p.get("emoji") == env_pair.get("emoji")
                         and p.get("target_users") == env_pair.get("target_users")
+                        and p.get("source_lang_limit") == env_pair.get("source_lang_limit")
                         for p in data["channels"][s_id]
                     ):
                         data["channels"][s_id].append(env_pair)
@@ -240,16 +248,19 @@ class AutoTranslatorCog(commands.Cog):
         target_channel: discord.abc.Messageable,
         deepl_lang: Optional[str],
         mymemory_lang: str,
-        lang_label: str
+        lang_label: str,
+        source_lang_limit: Optional[str] = None
     ) -> bool:
         """メッセージを翻訳し、指定のターゲットチャンネルに Embed で送信する共通ヘルパー。"""
         content = message.content.strip()
         if not content:
             return False
 
-        translated_text, engine = translate(content, deepl_lang, mymemory_lang)
+        translated_text, engine = translate(
+            content, deepl_lang, mymemory_lang, source_lang_limit=source_lang_limit
+        )
 
-        if engine == "same_language" or not translated_text:
+        if engine in ("same_language", "source_lang_mismatch") or not translated_text:
             return False
 
         embed = discord.Embed(
@@ -325,7 +336,8 @@ class AutoTranslatorCog(commands.Cog):
                 target_channel=target_channel,
                 deepl_lang=deepl_lang,
                 mymemory_lang=mymemory_lang,
-                lang_label=lang_label
+                lang_label=lang_label,
+                source_lang_limit=pair.get("source_lang_limit")
             )
 
         # 2. mode == 'thread' のペア (スレッド内自動翻訳)
@@ -365,7 +377,8 @@ class AutoTranslatorCog(commands.Cog):
                     target_channel=target_thread,
                     deepl_lang=deepl_lang,
                     mymemory_lang=mymemory_lang,
-                    lang_label=lang_label
+                    lang_label=lang_label,
+                    source_lang_limit=pair.get("source_lang_limit")
                 )
 
     @commands.Cog.listener()
@@ -479,7 +492,8 @@ class AutoTranslatorCog(commands.Cog):
                 target_channel=target_channel,
                 deepl_lang=deepl_lang,
                 mymemory_lang=mymemory_lang,
-                lang_label=lang_label
+                lang_label=lang_label,
+                source_lang_limit=pair.get("source_lang_limit")
             )
 
     @commands.group(name="auto_translate", aliases=["at"], invoke_without_command=True)
@@ -496,7 +510,8 @@ class AutoTranslatorCog(commands.Cog):
         lang_code: str,
         mode: str,
         emoji: Optional[str] = None,
-        target_users: Optional[list[str]] = None
+        target_users: Optional[list[str]] = None,
+        source_lang_limit: Optional[str] = None
     ):
         source_id = str(source_channel.id)
         new_pair = {
@@ -507,7 +522,8 @@ class AutoTranslatorCog(commands.Cog):
             "lang_label": lang_info.get("label"),
             "mode": mode,
             "emoji": emoji,
-            "target_users": target_users
+            "target_users": target_users,
+            "source_lang_limit": source_lang_limit
         }
 
         if "channels" not in self.configs:
@@ -523,6 +539,7 @@ class AutoTranslatorCog(commands.Cog):
                 and pair.get("mode", "all") == mode
                 and pair.get("emoji") == emoji
                 and pair.get("target_users") == target_users
+                and pair.get("source_lang_limit") == source_lang_limit
             ):
                 self.configs["channels"][source_id][i] = new_pair
                 updated = True
@@ -541,7 +558,8 @@ class AutoTranslatorCog(commands.Cog):
         source_channel: discord.TextChannel,
         target_channel: discord.TextChannel,
         lang_code: str,
-        target_user: Optional[str] = None
+        target_user: Optional[str] = None,
+        source_lang: Optional[str] = None
     ):
         """全自動翻訳ペアを追加します。（転送元と転送先が同じ場合はスレッド内自動翻訳になります）"""
         lang_info = get_lang_info_by_code(lang_code)
@@ -552,9 +570,10 @@ class AutoTranslatorCog(commands.Cog):
         mode = "thread" if source_channel.id == target_channel.id else "all"
         target_users = [target_user] if target_user else None
         self._add_pair_internal(
-            source_channel, target_channel, lang_info, lang_code, mode=mode, target_users=target_users
+            source_channel, target_channel, lang_info, lang_code, mode=mode, target_users=target_users, source_lang_limit=source_lang
         )
         user_info = f"\n• 対象ユーザー: **{target_user}** 限定" if target_user else " (全ユーザー対象)"
+        src_lang_info = f"\n• 元言語制限: **{source_lang}** 限定" if source_lang else ""
         mode_label = "スレッド自動翻訳" if mode == "thread" else "全自動翻訳"
         dest_info = f"• 転送先: {target_channel.mention}\n" if mode == "all" else f"• 対象チャンネル: {source_channel.mention}\n"
         await ctx.send(
@@ -562,7 +581,7 @@ class AutoTranslatorCog(commands.Cog):
             f"• 転送元: {source_channel.mention}\n"
             f"{dest_info}"
             f"• 言語: **{lang_info['label']}** (`{lang_code}`)\n"
-            f"• モード: **{mode_label}**{user_info}"
+            f"• モード: **{mode_label}**{user_info}{src_lang_info}"
         )
 
     @auto_translate.command(name="add_thread")
@@ -572,9 +591,10 @@ class AutoTranslatorCog(commands.Cog):
         ctx: commands.Context,
         source_channel: discord.TextChannel,
         lang_code: str,
-        target_user: Optional[str] = None
+        target_user: Optional[str] = None,
+        source_lang: Optional[str] = "ja"
     ):
-        """スレッド自動翻訳ペアを追加します。（指定チャンネルの発言の直下にスレッドを作成して翻訳投稿）"""
+        """スレッド自動翻訳ペアを追加します。（[source_lang] 省略時は ja 限定）"""
         lang_info = get_lang_info_by_code(lang_code)
         if not lang_info:
             await ctx.send(f"❌ 指定された言語コード `{lang_code}` が見つかりません。")
@@ -587,14 +607,16 @@ class AutoTranslatorCog(commands.Cog):
             lang_info=lang_info,
             lang_code=lang_code,
             mode="thread",
-            target_users=target_users
+            target_users=target_users,
+            source_lang_limit=source_lang
         )
         user_info = f"\n• 対象ユーザー: **{target_user}** 限定" if target_user else " (全ユーザー対象)"
+        src_lang_info = f"\n• 元言語制限: **{source_lang}** 限定 (その他言語はスキップ)" if source_lang else " (元言語制限なし)"
         await ctx.send(
             f"✅ **スレッド自動翻訳ペア**を設定しました！\n"
             f"• 対象チャンネル: {source_channel.mention}\n"
-            f"• 言語: **{lang_info['label']}** (`{lang_code}`)\n"
-            f"• モード: **スレッド自動翻訳**{user_info}\n"
+            f"• 翻訳言語: **{lang_info['label']}** (`{lang_code}`)\n"
+            f"• モード: **スレッド自動翻訳**{user_info}{src_lang_info}\n"
             f"💡 発言の直下に自動でスレッドが作成され、翻訳が投稿されます。"
         )
 
@@ -607,7 +629,8 @@ class AutoTranslatorCog(commands.Cog):
         target_channel: discord.TextChannel,
         lang_code: str,
         emoji: Optional[str] = None,
-        target_user: Optional[str] = None
+        target_user: Optional[str] = None,
+        source_lang: Optional[str] = None
     ):
         """特定スタンプ・特定ユーザー指定のトリガー翻訳ペアを追加します。"""
         lang_info = get_lang_info_by_code(lang_code)
@@ -617,7 +640,7 @@ class AutoTranslatorCog(commands.Cog):
 
         target_users = [target_user] if target_user else None
         self._add_pair_internal(
-            source_channel, target_channel, lang_info, lang_code, mode="trigger", emoji=emoji, target_users=target_users
+            source_channel, target_channel, lang_info, lang_code, mode="trigger", emoji=emoji, target_users=target_users, source_lang_limit=source_lang
         )
         
         global_users = ", ".join(self.configs.get("trigger_users", ["user1"]))
@@ -625,6 +648,7 @@ class AutoTranslatorCog(commands.Cog):
 
         emoji_str = emoji if emoji else f"{global_emojis} (全体設定)"
         user_str = target_user if target_user else f"{global_users} (全体設定)"
+        src_lang_info = f"\n• 元言語制限: **{source_lang}** 限定" if source_lang else ""
 
         await ctx.send(
             f"✅ **トリガー限定翻訳ペア**を設定しました！\n"
@@ -632,7 +656,7 @@ class AutoTranslatorCog(commands.Cog):
             f"• 転送先: {target_channel.mention}\n"
             f"• 言語: **{lang_info['label']}** (`{lang_code}`)\n"
             f"• トリガースタンプ: {emoji_str}\n"
-            f"• 対象ユーザー: **{user_str}**\n"
+            f"• 対象ユーザー: **{user_str}**{src_lang_info}\n"
             f"💡 対象ユーザーが発言し、指定スタンプが押された時のみ翻訳転送されます。"
         )
 
@@ -929,6 +953,10 @@ class AutoTranslatorCog(commands.Cog):
                 if pair_users:
                     pair_details.append(f"• **対象ユーザー**: {', '.join(pair_users)} 限定")
 
+                src_lang_limit = pair.get("source_lang_limit")
+                if src_lang_limit:
+                    pair_details.append(f"• **元言語制限**: {src_lang_limit} 限定")
+
                 embed.add_field(
                     name=f"Pair #{count + 1}{mode_str}{from_env}",
                     value="\n".join(pair_details),
@@ -955,7 +983,8 @@ class AutoTranslatorCog(commands.Cog):
                 emoji = pair.get("emoji") or ""
                 users_list = pair.get("target_users")
                 users_str = ";".join(users_list) if users_list else ""
-                export_items.append(f"{source_id}:{target_id}:{lang_code}:{mode}:{emoji}:{users_str}")
+                source_lang_str = pair.get("source_lang_limit") or ""
+                export_items.append(f"{source_id}:{target_id}:{lang_code}:{mode}:{emoji}:{users_str}:{source_lang_str}")
 
         env_pairs_val = ",".join(export_items)
         users_val = ",".join(self.configs.get("trigger_users", ["user1"]))

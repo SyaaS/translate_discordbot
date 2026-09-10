@@ -111,26 +111,36 @@ def translate(
     text: str,
     deepl_lang: str | None,
     mymemory_lang: str,
+    source_lang_limit: str | None = None
 ) -> tuple[str | None, str]:
     """
     テキストを翻訳する。
 
     Args:
-        text:          翻訳対象テキスト
-        deepl_lang:    DeepL 言語コード。None の場合は DeepL をスキップ。
-        mymemory_lang: MyMemory 言語コード（フォールバック用）
+        text:               翻訳対象テキスト
+        deepl_lang:         DeepL 言語コード。None の場合は DeepL をスキップ。
+        mymemory_lang:      MyMemory 言語コード（フォールバック用）
+        source_lang_limit:  指定された元言語コード（例: 'ja'）。指定時はこの言語の発言のみ翻訳。
 
     Returns:
         (translated_text, engine_name)
-        翻訳不要時は (None, "same_language")
+        翻訳不要時は (None, "same_language") や (None, "source_lang_mismatch")
         翻訳失敗時は (None, "")
     """
     if not text or not text.strip():
         return None, ""
 
-    # 0. ソース言語を検出し、ターゲットと同じならAPI呼び出しをスキップ
+    # 0. ソース言語を検出
     detected = _detect_language(text)
-    # DeepL コードは "EN-US", "PT-BR" 等なのでプレフィックスで比較
+
+    # 元言語制限が指定されている場合、一致しなければスキップ
+    if source_lang_limit:
+        clean_limit = source_lang_limit.strip().lower()
+        if not detected.startswith(clean_limit):
+            logger.info("ソース言語(%s)が指定された元言語制限(%s)と一致しないため翻訳スキップ", detected, clean_limit)
+            return None, "source_lang_mismatch"
+
+    # ターゲットと同じならAPI呼び出しをスキップ
     deepl_prefix = deepl_lang.split("-")[0].lower() if deepl_lang else None
     if detected == mymemory_lang or (deepl_prefix and detected == deepl_prefix):
         logger.info(
