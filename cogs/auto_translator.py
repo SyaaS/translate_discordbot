@@ -44,8 +44,8 @@ def extract_source_message_id(embed: discord.Embed) -> Optional[int]:
 def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
     """
     環境変数 AUTO_TRANSLATE_PAIRS 文字列をパースする。
-    フォーマット: "ソースID:ターゲットID:言語コード[:モード],..."
-    例: "333333333333333333:222222222222222222:en:trigger"
+    フォーマット: "ソースID:ターゲットID:言語コード[:モード][:絵文字][:ユーザー1;ユーザー2],..."
+    例: "333333333333333333:222222222222222222:en:trigger:🇺🇸:user1"
     """
     configs: dict[str, list[dict]] = {}
     if not env_str or not env_str.strip():
@@ -57,14 +57,17 @@ def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
         if not item:
             continue
         parts = item.split(":")
-        if len(parts) < 3 or len(parts) > 4:
+        if len(parts) < 3:
             logger.warning("環境変数 AUTO_TRANSLATE_PAIRS のパース失敗 (形式不正): %s", item)
             continue
 
         source_id_str = parts[0].strip()
         target_id_str = parts[1].strip()
         lang_code = parts[2].strip()
-        mode = parts[3].strip().lower() if len(parts) == 4 else "all"
+        mode = parts[3].strip().lower() if len(parts) >= 4 and parts[3].strip() else "all"
+        emoji = parts[4].strip() if len(parts) >= 5 and parts[4].strip() else None
+        users_str = parts[5].strip() if len(parts) >= 6 and parts[5].strip() else None
+        target_users = [u.strip() for u in users_str.split(";") if u.strip()] if users_str else None
 
         try:
             target_id = int(target_id_str)
@@ -84,13 +87,21 @@ def parse_env_pairs(env_str: str) -> dict[str, list[dict]]:
             "mymemory_lang": lang_info.get("mymemory"),
             "lang_label": lang_info.get("label"),
             "mode": mode,
+            "emoji": emoji,
+            "target_users": target_users,
             "is_from_env": True
         }
 
         if source_id_str not in configs:
             configs[source_id_str] = []
 
-        if not any(p["target_channel_id"] == target_id and p.get("mode", "all") == mode for p in configs[source_id_str]):
+        if not any(
+            p["target_channel_id"] == target_id 
+            and p.get("mode", "all") == mode 
+            and p.get("emoji") == emoji
+            and p.get("target_users") == target_users
+            for p in configs[source_id_str]
+        ):
             configs[source_id_str].append(pair_data)
 
     return configs
@@ -145,7 +156,10 @@ class AutoTranslatorCog(commands.Cog):
                     data["channels"][s_id] = []
                 for env_pair in pairs:
                     if not any(
-                        p["target_channel_id"] == env_pair["target_channel_id"] and p.get("mode", "all") == env_pair.get("mode", "all")
+                        p["target_channel_id"] == env_pair["target_channel_id"]
+                        and p.get("mode", "all") == env_pair.get("mode", "all")
+                        and p.get("emoji") == env_pair.get("emoji")
+                        and p.get("target_users") == env_pair.get("target_users")
                         for p in data["channels"][s_id]
                     ):
                         data["channels"][s_id].append(env_pair)
@@ -243,6 +257,17 @@ class AutoTranslatorCog(commands.Cog):
         # mode == 'all' のペアのみを全自動翻訳対象とする
         all_pairs = [p for p in channels_config[source_channel_id] if p.get("mode", "all") == "all"]
         for pair in all_pairs:
+            # 特定ユーザー限定フィルタが設定されている場合の検証
+            target_users = pair.get("target_users")
+            if target_users:
+                author_match = (
+                    str(message.author.id) in target_users
+                    or message.author.name.lower() in [u.lower() for u in target_users]
+                    or message.author.display_name.lower() in [u.lower() for u in target_users]
+                )
+                if not author_match:
+                    continue
+
             target_channel_id = pair["target_channel_id"]
             deepl_lang = pair.get("deepl_lang")
             mymemory_lang = pair.get("mymemory_lang")
@@ -267,7 +292,7 @@ class AutoTranslatorCog(commands.Cog):
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         """
-        リアクション追加時に特定ユーザー(User1)＆特定スタンプでトリガー翻訳 (mode == 'trigger') を行うリスナー。
+        リアクション追加時に特定ユーザー＆特定スタンプでトリガー翻訳 (mode == 'trigger') を行うリスナー。
         【解決策A】発言者本人かつリアクション実行者が対象ユーザーに含まれること。
         """
 
@@ -275,17 +300,28 @@ class AutoTranslatorCog(commands.Cog):
             return
 
         emoji_str = str(payload.emoji)
-        trigger_emojis = self.configs.get("trigger_emojis", ["🌐"])
-        if emoji_str not in trigger_emojis:
-            return
-
         source_channel_id = str(payload.channel_id)
         channels_config = self.configs.get("channels", {})
         if source_channel_id not in channels_config:
             return
 
-        trigger_pairs = [p for p in channels_config[source_channel_id] if p.get("mode") == "trigger"]
-        if not trigger_pairs:
+        all_trigger_pairs = [p for p in channels_config[source_channel_id] if p.get("mode") == "trigger"]
+        if not all_trigger_pairs:
+            return
+
+        # 押された絵文字がペア個別設定または全体トリガー設定とマッチするペアのみ抽出
+        global_trigger_emojis = self.configs.get("trigger_emojis", ["🌐"])
+        matching_pairs = []
+        for pair in all_trigger_pairs:
+            pair_emoji = pair.get("emoji")
+            if pair_emoji:
+                if emoji_str == pair_emoji:
+                    matching_pairs.append(pair)
+            else:
+                if emoji_str in global_trigger_emojis:
+                    matching_pairs.append(pair)
+
+        if not matching_pairs:
             return
 
         channel = self.bot.get_channel(payload.channel_id)
@@ -303,18 +339,6 @@ class AutoTranslatorCog(commands.Cog):
         if message.author.bot:
             return
 
-        trigger_users = self.configs.get("trigger_users", ["user1"])
-
-        # 1. メッセージ発言者の検証
-        author_match = (
-            str(message.author.id) in trigger_users
-            or message.author.name.lower() in [u.lower() for u in trigger_users]
-            or message.author.display_name.lower() in [u.lower() for u in trigger_users]
-        )
-        if not author_match:
-            return
-
-        # 2. リアクション実行者の検証 (解決策A: 押した人自身も特定ユーザーであること)
         reactor = payload.member
         if reactor is None:
             try:
@@ -322,17 +346,32 @@ class AutoTranslatorCog(commands.Cog):
             except discord.HTTPException:
                 return
 
-        reactor_match = (
-            str(reactor.id) in trigger_users
-            or reactor.name.lower() in [u.lower() for u in trigger_users]
-            or (hasattr(reactor, "display_name") and reactor.display_name.lower() in [u.lower() for u in trigger_users])
-        )
-        if not reactor_match:
-            logger.debug("リアクション実行者 (%s) がトリガー対象外ユーザーのためスキップ", reactor)
-            return
+        global_trigger_users = self.configs.get("trigger_users", ["user1"])
 
-        # 3. 転送先へ一括翻訳投稿
-        for pair in trigger_pairs:
+        # 該当する各ペアについて、発言者＆実行者検証を行って翻訳投稿
+        for pair in matching_pairs:
+            pair_users = pair.get("target_users") or global_trigger_users
+
+            # 1. メッセージ発言者の検証
+            author_match = (
+                str(message.author.id) in pair_users
+                or message.author.name.lower() in [u.lower() for u in pair_users]
+                or message.author.display_name.lower() in [u.lower() for u in pair_users]
+            )
+            if not author_match:
+                continue
+
+            # 2. リアクション実行者の検証 (解決策A: 押した人自身も対象ユーザーであること)
+            reactor_match = (
+                str(reactor.id) in pair_users
+                or reactor.name.lower() in [u.lower() for u in pair_users]
+                or (hasattr(reactor, "display_name") and reactor.display_name.lower() in [u.lower() for u in pair_users])
+            )
+            if not reactor_match:
+                logger.debug("リアクション実行者 (%s) がトリガー対象外ユーザーのためスキップ", reactor)
+                continue
+
+            # 3. 転送先へ翻訳投稿
             target_channel_id = pair["target_channel_id"]
             deepl_lang = pair.get("deepl_lang")
             mymemory_lang = pair.get("mymemory_lang")
@@ -371,7 +410,9 @@ class AutoTranslatorCog(commands.Cog):
         target_channel: discord.TextChannel,
         lang_info: dict,
         lang_code: str,
-        mode: str
+        mode: str,
+        emoji: Optional[str] = None,
+        target_users: Optional[list[str]] = None
     ):
         source_id = str(source_channel.id)
         new_pair = {
@@ -380,7 +421,9 @@ class AutoTranslatorCog(commands.Cog):
             "deepl_lang": lang_info.get("deepl"),
             "mymemory_lang": lang_info.get("mymemory"),
             "lang_label": lang_info.get("label"),
-            "mode": mode
+            "mode": mode,
+            "emoji": emoji,
+            "target_users": target_users
         }
 
         if "channels" not in self.configs:
@@ -391,7 +434,12 @@ class AutoTranslatorCog(commands.Cog):
 
         updated = False
         for i, pair in enumerate(self.configs["channels"][source_id]):
-            if pair["target_channel_id"] == target_channel.id and pair.get("mode", "all") == mode:
+            if (
+                pair["target_channel_id"] == target_channel.id 
+                and pair.get("mode", "all") == mode
+                and pair.get("emoji") == emoji
+                and pair.get("target_users") == target_users
+            ):
                 self.configs["channels"][source_id][i] = new_pair
                 updated = True
                 break
@@ -408,21 +456,26 @@ class AutoTranslatorCog(commands.Cog):
         ctx: commands.Context,
         source_channel: discord.TextChannel,
         target_channel: discord.TextChannel,
-        lang_code: str
+        lang_code: str,
+        target_user: Optional[str] = None
     ):
-        """全発言全自動翻訳ペアを追加します。"""
+        """全自動翻訳ペアを追加します。（[target_user] 指定時は特定ユーザーのみ自動翻訳）"""
         lang_info = get_lang_info_by_code(lang_code)
         if not lang_info:
             await ctx.send(f"❌ 指定された言語コード `{lang_code}` が見つかりません。")
             return
 
-        self._add_pair_internal(source_channel, target_channel, lang_info, lang_code, mode="all")
+        target_users = [target_user] if target_user else None
+        self._add_pair_internal(
+            source_channel, target_channel, lang_info, lang_code, mode="all", target_users=target_users
+        )
+        user_info = f"\n• 対象ユーザー: **{target_user}** 限定" if target_user else " (全ユーザー対象)"
         await ctx.send(
             f"✅ **全自動翻訳ペア**を設定しました！\n"
             f"• 転送元: {source_channel.mention}\n"
             f"• 転送先: {target_channel.mention}\n"
             f"• 言語: **{lang_info['label']}** (`{lang_code}`)\n"
-            f"• モード: **全自動翻訳 (全発言対象)**"
+            f"• モード: **全自動翻訳**{user_info}"
         )
 
     @auto_translate.command(name="add_trigger")
@@ -432,25 +485,34 @@ class AutoTranslatorCog(commands.Cog):
         ctx: commands.Context,
         source_channel: discord.TextChannel,
         target_channel: discord.TextChannel,
-        lang_code: str
+        lang_code: str,
+        emoji: Optional[str] = None,
+        target_user: Optional[str] = None
     ):
-        """特定ユーザー＋特定スタンプトリガー専用の翻訳ペアを追加します。"""
+        """特定スタンプ・特定ユーザー指定のトリガー翻訳ペアを追加します。"""
         lang_info = get_lang_info_by_code(lang_code)
         if not lang_info:
             await ctx.send(f"❌ 指定された言語コード `{lang_code}` が見つかりません。")
             return
 
-        self._add_pair_internal(source_channel, target_channel, lang_info, lang_code, mode="trigger")
-        trigger_users = ", ".join(self.configs.get("trigger_users", ["user1"]))
-        trigger_emojis = " ".join(self.configs.get("trigger_emojis", ["🌐"]))
+        target_users = [target_user] if target_user else None
+        self._add_pair_internal(
+            source_channel, target_channel, lang_info, lang_code, mode="trigger", emoji=emoji, target_users=target_users
+        )
+        
+        global_users = ", ".join(self.configs.get("trigger_users", ["user1"]))
+        global_emojis = " ".join(self.configs.get("trigger_emojis", ["🌐"]))
+
+        emoji_str = emoji if emoji else f"{global_emojis} (全体設定)"
+        user_str = target_user if target_user else f"{global_users} (全体設定)"
 
         await ctx.send(
             f"✅ **トリガー限定翻訳ペア**を設定しました！\n"
             f"• 転送元: {source_channel.mention}\n"
             f"• 転送先: {target_channel.mention}\n"
             f"• 言語: **{lang_info['label']}** (`{lang_code}`)\n"
-            f"• 対象ユーザー: **{trigger_users}**\n"
-            f"• トリガースタンプ: {trigger_emojis}\n"
+            f"• トリガースタンプ: {emoji_str}\n"
+            f"• 対象ユーザー: **{user_str}**\n"
             f"💡 対象ユーザーが発言し、指定スタンプが押された時のみ翻訳転送されます。"
         )
 
@@ -727,9 +789,21 @@ class AutoTranslatorCog(commands.Cog):
                 mode_str = " (トリガー限定)" if pair.get("mode") == "trigger" else " (全自動)"
                 from_env = " [環境変数]" if pair.get("is_from_env") else ""
 
+                pair_details = [
+                    f"• **転送元**: {source_name}",
+                    f"• **転送先**: {target_name}",
+                    f"• **言語**: {lang_label}"
+                ]
+                if pair.get("emoji"):
+                    pair_details.append(f"• **トリガースタンプ**: {pair['emoji']}")
+
+                pair_users = pair.get("target_users")
+                if pair_users:
+                    pair_details.append(f"• **対象ユーザー**: {', '.join(pair_users)} 限定")
+
                 embed.add_field(
                     name=f"Pair #{count + 1}{mode_str}{from_env}",
-                    value=f"• **転送元**: {source_name}\n• **転送先**: {target_name}\n• **言語**: {lang_label}",
+                    value="\n".join(pair_details),
                     inline=False
                 )
                 count += 1
@@ -750,7 +824,10 @@ class AutoTranslatorCog(commands.Cog):
                 target_id = pair["target_channel_id"]
                 lang_code = pair.get("target_lang_code", "en")
                 mode = pair.get("mode", "all")
-                export_items.append(f"{source_id}:{target_id}:{lang_code}:{mode}")
+                emoji = pair.get("emoji") or ""
+                users_list = pair.get("target_users")
+                users_str = ";".join(users_list) if users_list else ""
+                export_items.append(f"{source_id}:{target_id}:{lang_code}:{mode}:{emoji}:{users_str}")
 
         env_pairs_val = ",".join(export_items)
         users_val = ",".join(self.configs.get("trigger_users", ["user1"]))
