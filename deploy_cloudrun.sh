@@ -106,6 +106,14 @@ if gcloud secrets describe "${SECRET_PREFIX}AUTO_TRANSLATE_PAIRS" --project="$PR
   echo "  Secret ${SECRET_PREFIX}AUTO_TRANSLATE_PAIRS も読み込みます..."
   SECRETS_SET="${SECRETS_SET},AUTO_TRANSLATE_PAIRS=${SECRET_PREFIX}AUTO_TRANSLATE_PAIRS:latest"
 fi
+if gcloud secrets describe "${SECRET_PREFIX}TRIGGER_USERS" --project="$PROJECT_ID" &>/dev/null; then
+  echo "  Secret ${SECRET_PREFIX}TRIGGER_USERS も読み込みます..."
+  SECRETS_SET="${SECRETS_SET},TRIGGER_USERS=${SECRET_PREFIX}TRIGGER_USERS:latest"
+fi
+if gcloud secrets describe "${SECRET_PREFIX}TRIGGER_EMOJIS" --project="$PROJECT_ID" &>/dev/null; then
+  echo "  Secret ${SECRET_PREFIX}TRIGGER_EMOJIS も読み込みます..."
+  SECRETS_SET="${SECRETS_SET},TRIGGER_EMOJIS=${SECRET_PREFIX}TRIGGER_EMOJIS:latest"
+fi
 
 gcloud run deploy "$SERVICE_NAME" \
   --project="$PROJECT_ID" \
