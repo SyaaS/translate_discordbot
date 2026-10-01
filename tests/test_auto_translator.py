@@ -52,6 +52,33 @@ class TestAutoTranslator(unittest.TestCase):
         msg_id = extract_source_message_id(embed)
         self.assertEqual(msg_id, 987654321098765432)
 
+    def test_letter_reaction_mapping(self):
+        from utils.flag_map import get_lang_info
+        info_j = get_lang_info("\U0001F1EF")
+        self.assertIsNotNone(info_j)
+        self.assertEqual(info_j["mymemory"], "ja")
+
+        info_e = get_lang_info("\U0001F1EA")
+        self.assertIsNotNone(info_e)
+        self.assertEqual(info_e["mymemory"], "en")
+
+        info_j_str = get_lang_info("J")
+        self.assertIsNotNone(info_j_str)
+        self.assertEqual(info_j_str["mymemory"], "ja")
+
+        info_e_str = get_lang_info("e")
+        self.assertIsNotNone(info_e_str)
+        self.assertEqual(info_e_str["mymemory"], "en")
+
+    def test_parse_env_pairs_mode_1(self):
+        configs = parse_env_pairs("12345:12345:ja:1:::")
+        self.assertIn("12345", configs)
+        self.assertEqual(configs["12345"][0]["mode"], "1")
+        self.assertEqual(configs["12345"][0]["target_lang_code"], "ja")
+
+        configs_mode1_str = parse_env_pairs("12345:12345:ja:mode_1:::")
+        self.assertEqual(configs_mode1_str["12345"][0]["mode"], "1")
+
 
 if __name__ == "__main__":
     unittest.main()

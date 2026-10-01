@@ -82,9 +82,55 @@ FLAG_TO_LANG: dict[str, dict] = {
 }
 
 
+# アルファベット（Regional Indicator記号・文字絵文字）→ 言語コードマッピング
+LETTER_TO_LANG: dict[str, dict] = {
+    # J: Japanese
+    "\U0001F1EF": {"deepl": "JA", "mymemory": "ja", "label": "Japanese"},
+    "j": {"deepl": "JA", "mymemory": "ja", "label": "Japanese"},
+    "J": {"deepl": "JA", "mymemory": "ja", "label": "Japanese"},
+
+    # E: English
+    "\U0001F1EA": {"deepl": "EN-US", "mymemory": "en", "label": "English"},
+    "e": {"deepl": "EN-US", "mymemory": "en", "label": "English"},
+    "E": {"deepl": "EN-US", "mymemory": "en", "label": "English"},
+
+    # C: Chinese (Simplified)
+    "\U0001F1E8": {"deepl": "ZH-HANS", "mymemory": "zh-CN", "label": "Chinese (Simplified)"},
+    "c": {"deepl": "ZH-HANS", "mymemory": "zh-CN", "label": "Chinese (Simplified)"},
+    "C": {"deepl": "ZH-HANS", "mymemory": "zh-CN", "label": "Chinese (Simplified)"},
+
+    # K: Korean
+    "\U0001F1F0": {"deepl": "KO", "mymemory": "ko", "label": "Korean"},
+    "k": {"deepl": "KO", "mymemory": "ko", "label": "Korean"},
+    "K": {"deepl": "KO", "mymemory": "ko", "label": "Korean"},
+
+    # F: French
+    "\U0001F1EB": {"deepl": "FR", "mymemory": "fr", "label": "French"},
+    "f": {"deepl": "FR", "mymemory": "fr", "label": "French"},
+    "F": {"deepl": "FR", "mymemory": "fr", "label": "French"},
+
+    # D: German
+    "\U0001F1E9": {"deepl": "DE", "mymemory": "de", "label": "German"},
+    "d": {"deepl": "DE", "mymemory": "de", "label": "German"},
+    "D": {"deepl": "DE", "mymemory": "de", "label": "German"},
+
+    # S: Spanish
+    "\U0001F1F8": {"deepl": "ES", "mymemory": "es", "label": "Spanish"},
+    "s": {"deepl": "ES", "mymemory": "es", "label": "Spanish"},
+    "S": {"deepl": "ES", "mymemory": "es", "label": "Spanish"},
+}
+
+
 def get_lang_info(emoji: str) -> dict | None:
-    """国旗絵文字から言語情報を返す。未対応の場合は None を返す。"""
-    return FLAG_TO_LANG.get(emoji)
+    """国旗絵文字またはアルファベット記号から言語情報を返す。未対応の場合は None を返す。"""
+    res = FLAG_TO_LANG.get(emoji)
+    if res:
+        return res
+    res = LETTER_TO_LANG.get(emoji)
+    if res:
+        return res
+    clean = emoji.strip(":").lower()
+    return LETTER_TO_LANG.get(clean)
 
 
 def is_flag_emoji(emoji: str) -> bool:

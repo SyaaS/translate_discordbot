@@ -52,7 +52,7 @@ def translate_deepl(text: str, target_lang: str) -> str | None:
 
 # ── MyMemory ───────────────────────────────────────────────────────────────
 
-def _detect_language(text: str) -> str:
+def detect_language(text: str) -> str:
     """
     テキストのソース言語を検出する（langdetect 使用・オフライン・無料）。
     検出失敗時は "en" をデフォルトとして返す。
@@ -64,6 +64,9 @@ def _detect_language(text: str) -> str:
         return lang.lower()
     except Exception:
         return "en"
+
+
+_detect_language = detect_language
 
 
 def translate_mymemory(text: str, target_lang: str) -> str | None:

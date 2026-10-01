@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from utils.flag_map import FLAG_TO_LANG
+from utils.flag_map import FLAG_TO_LANG, LETTER_TO_LANG
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +140,10 @@ def get_merged_map(guild_id: int) -> dict[str, dict]:
     guild_cfg = get_guild_config(guild_id)
     merged: dict[str, dict] = {}
 
-    # 1. デフォルト国旗マッピング（無効でなければ）
+    # 1. デフォルト国旗および文字マッピング（無効でなければ）
     if not guild_cfg.get("disable_default_flags", False):
         merged.update(FLAG_TO_LANG)
+        merged.update(LETTER_TO_LANG)
 
     # 2. カスタムマッピング（上書き優先）
     merged.update(guild_cfg.get("custom_mappings", {}))
@@ -152,7 +153,12 @@ def get_merged_map(guild_id: int) -> dict[str, dict]:
 
 def get_lang_info(guild_id: int, emoji: str) -> dict | None:
     """マージ済みマップから指定絵文字の言語情報を返す。未対応なら None。"""
-    return get_merged_map(guild_id).get(emoji)
+    merged = get_merged_map(guild_id)
+    res = merged.get(emoji)
+    if res:
+        return res
+    clean = emoji.strip(":").lower()
+    return merged.get(clean)
 
 
 def add_custom_mapping(
