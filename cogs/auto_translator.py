@@ -358,8 +358,20 @@ class AutoTranslatorCog(commands.Cog):
                 deepl_lang = pair.get("deepl_lang")
                 mymemory_lang = pair.get("mymemory_lang")
                 lang_label = pair.get("lang_label", "Unknown")
+                source_lang_limit = pair.get("source_lang_limit")
 
-                # スレッドの取得または新規作成
+                content = message.content.strip()
+                if not content:
+                    continue
+
+                translated_text, engine = translate(
+                    content, deepl_lang, mymemory_lang, source_lang_limit=source_lang_limit
+                )
+
+                if engine in ("same_language", "source_lang_mismatch") or not translated_text:
+                    continue
+
+                # スレッドの取得または新規作成（翻訳成功時のみ）
                 target_thread = message.thread
                 if target_thread is None:
                     try:
@@ -372,14 +384,28 @@ class AutoTranslatorCog(commands.Cog):
                         logger.error("自動翻訳スレッド作成失敗: msg_id=%s, error=%s", message.id, e)
                         continue
 
-                await self._send_translated_embed(
-                    message=message,
-                    target_channel=target_thread,
-                    deepl_lang=deepl_lang,
-                    mymemory_lang=mymemory_lang,
-                    lang_label=lang_label,
-                    source_lang_limit=pair.get("source_lang_limit")
+                embed = discord.Embed(
+                    description=translated_text,
+                    color=discord.Color.blue(),
+                    timestamp=message.created_at
                 )
+                embed.set_author(
+                    name=message.author.display_name,
+                    icon_url=message.author.display_avatar.url
+                )
+                embed.set_footer(
+                    text=f"Translated to {lang_label} via {engine} | Source: #{message.channel.name if hasattr(message.channel, 'name') else 'channel'}"
+                )
+                embed.add_field(
+                    name="Original Message",
+                    value=f"[Jump to Message]({message.jump_url})",
+                    inline=False
+                )
+
+                try:
+                    await target_thread.send(embed=embed)
+                except (discord.Forbidden, discord.HTTPException) as e:
+                    logger.error("自動翻訳スレッドメッセージ送信失敗: %s", e)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
