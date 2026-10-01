@@ -36,8 +36,17 @@
 ## 📖 使い方・コマンド一覧
 
 ### リアクション翻訳
-1. 翻訳したいメッセージに国旗絵文字（例: 🇺🇸 🇯🇵 🇨🇳）やアルファベット（🇯 ➔ 日本語、🇪 ➔ 英語 等）でリアクションします。
+1. 翻訳したいメッセージに国旗絵文字（例: 🇺🇸 🇯🇵 🇨🇳）やアルファベット記号（🇯 ➔ 日本語、🇪 ➔ 英語 等）でリアクションします。
 2. ボットが自動的にスレッドを作成し、翻訳を投稿してアーカイブします。
+
+**アルファベット（Regional Indicator）対応表:**
+- 🇯 (`:regional_indicator_j:`) ➔ **日本語 (`ja`)**
+- 🇪 (`:regional_indicator_e:`) ➔ **英語 (`en`)**
+- 🇨 (`:regional_indicator_c:`) ➔ **簡体字中国語 (`zh`)**
+- 🇰 (`:regional_indicator_k:`) ➔ **韓国語 (`ko`)**
+- 🇫 (`:regional_indicator_f:`) ➔ **フランス語 (`fr`)**
+- 🇩 (`:regional_indicator_d:`) ➔ **ドイツ語 (`de`)**
+- 🇸 (`:regional_indicator_s:`) ➔ **スペイン語 (`es`)**
 
 ### 絵文字マッピング管理（スラッシュコマンド）
 | コマンド | 説明 |
@@ -62,6 +71,14 @@
 | `!at backfill <#転送元> <#転送先> <言語コード> [件数] [開始ID]` | 過去メッセージの一括翻訳・転送 |
 | `!at env_export` | 現在の設定を環境変数 (`AUTO_TRANSLATE_PAIRS` 等) 形式で出力 |
 
+#### 💡 モード1 (`Mode 1`) の動作仕様
+多言語交流チャンネルで特定の言語（例: 日本語 `ja`）をメインとする場合に最適化された双方向スレッド自動翻訳です。
+- **コマンド**: `!at add_mode 1 <#対象チャンネル> <基準言語コード>`（例: `!at add_mode 1 #交流チャネル ja`）
+- **通常発言の翻訳**: 基準言語以外の発言（英語、中国語等）があると、自動でスレッドを作成し **基準言語（`ja`）** 翻訳を投稿。
+- **基準言語での返信**: 基準言語以外の投稿に基準言語で返信（リプライ）すると、返信元の投稿言語（英語や中国語）を自動判定し、その言語に翻訳したスレッドを投稿。
+- **他言語での返信**: チャンネル参加者全員が読めるよう、自動で **基準言語（`ja`）** 翻訳スレッドを投稿。
+- **重複・不要翻訳のスキップ**: 同一言語同士の発言や返信（例: 英語➔英語、日本語➔日本語）は自動スキップ。
+
 ---
 
 ## 🔒 永続化（環境変数形式）
@@ -72,7 +89,7 @@
 `SOURCE_ID:TARGET_ID:LANG_CODE:MODE:EMOJI:TARGET_USERS:SOURCE_LANG_LIMIT`
 
 ```env
-AUTO_TRANSLATE_PAIRS="111111111111111111:222222222222222222:ja:all:::,111111111111111111:111111111111111111:zh:thread::user1:ja,333333333333333333:111111111111111111:zh:trigger:<:translate_zhcn:999999999>:user1:,333333333333333333:444444444444444444:en:trigger:<:translate_en:888888888>:user1:"
+AUTO_TRANSLATE_PAIRS="111111111111111111:111111111111111111:ja:1:::,111111111111111111:222222222222222222:ja:all:::,111111111111111111:111111111111111111:zh:thread::user1:ja,333333333333333333:111111111111111111:zh:trigger:<:translate_zhcn:999999999>:user1:"
 TRIGGER_USERS="user1"
 TRIGGER_EMOJIS="🌐"
 ```
@@ -119,6 +136,18 @@ chmod +x set_gcp_secrets.sh
 # ビルド＆デプロイ
 chmod +x deploy_cloudrun.sh
 ./deploy_cloudrun.sh --prefix translate_discordbot_
+```
+
+### 3. Fly.io へのデプロイ
+```bash
+# ログイン（初回のみ）
+fly auth login
+
+# 初回シークレット設定（必要な場合）
+fly secrets set DISCORD_TOKEN="xxxx" DEEPL_API_KEY="xxxx" -a translate-discordbot
+
+# デプロイ
+fly deploy
 ```
 
 ---
