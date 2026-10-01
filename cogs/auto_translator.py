@@ -276,6 +276,14 @@ class AutoTranslatorCog(commands.Cog):
             )
             logger.info("Firestore に Bot (%s) の初期設定を自動保存しました", bot_id)
 
+    async def _archive_thread(self, thread: discord.Thread) -> None:
+        """スレッドをアーカイブ（クローズ）する。"""
+        try:
+            await thread.edit(archived=True)
+            logger.info("スレッドをクローズしました: thread_id=%s", thread.id)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            logger.warning("スレッドのアーカイブ失敗: thread_id=%s, error=%s", thread.id, e)
+
     async def _get_already_translated_source_ids(
         self,
         target_channel: discord.TextChannel,
@@ -455,8 +463,15 @@ class AutoTranslatorCog(commands.Cog):
                     inline=False
                 )
 
+                if target_thread.archived:
+                    try:
+                        await target_thread.edit(archived=False)
+                    except (discord.Forbidden, discord.HTTPException) as e:
+                        logger.warning("スレッド再開失敗: %s", e)
+
                 try:
                     await target_thread.send(embed=embed)
+                    await self._archive_thread(target_thread)
                 except (discord.Forbidden, discord.HTTPException) as e:
                     logger.error("自動翻訳スレッドメッセージ送信失敗: %s", e)
 
@@ -546,8 +561,15 @@ class AutoTranslatorCog(commands.Cog):
                         inline=False
                     )
 
+                    if target_thread.archived:
+                        try:
+                            await target_thread.edit(archived=False)
+                        except (discord.Forbidden, discord.HTTPException) as e:
+                            logger.warning("スレッド再開失敗: %s", e)
+
                     try:
                         await target_thread.send(embed=embed)
+                        await self._archive_thread(target_thread)
                     except (discord.Forbidden, discord.HTTPException) as e:
                         logger.error("モード1スレッドメッセージ送信失敗: %s", e)
 
