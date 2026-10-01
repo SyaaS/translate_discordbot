@@ -4,6 +4,7 @@ EmojiManagerCog: カスタム絵文字→言語マッピングの管理コマン
 サーバー管理者向けスラッシュコマンド群。ギルド単位で設定を管理する。
 """
 
+import asyncio
 import logging
 
 import discord
@@ -18,6 +19,7 @@ from utils.emoji_config import (
     load_config,
     remove_custom_mapping,
     set_disable_default_flags,
+    sync_from_firestore,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,12 @@ class EmojiManagerCog(commands.Cog):
         self.bot = bot
         # 起動時に設定ファイルを読み込む
         load_config()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """ボット起動時に Firestore から最新絵文字設定を同期する"""
+        if self.bot.user:
+            await asyncio.to_thread(sync_from_firestore, self.bot.user.id)
 
     # ── グループ定義 ──────────────────────────────────────────────────────
     emoji_group = app_commands.Group(

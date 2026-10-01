@@ -114,6 +114,14 @@ if gcloud secrets describe "${SECRET_PREFIX}TRIGGER_EMOJIS" --project="$PROJECT_
   echo "  Secret ${SECRET_PREFIX}TRIGGER_EMOJIS も読み込みます..."
   SECRETS_SET="${SECRETS_SET},TRIGGER_EMOJIS=${SECRET_PREFIX}TRIGGER_EMOJIS:latest"
 fi
+if gcloud secrets describe "${SECRET_PREFIX}FIREBASE_PROJECT_ID" --project="$PROJECT_ID" &>/dev/null; then
+  echo "  Secret ${SECRET_PREFIX}FIREBASE_PROJECT_ID も読み込みます..."
+  SECRETS_SET="${SECRETS_SET},FIREBASE_PROJECT_ID=${SECRET_PREFIX}FIREBASE_PROJECT_ID:latest"
+fi
+if gcloud secrets describe "${SECRET_PREFIX}FIREBASE_CREDENTIALS_JSON" --project="$PROJECT_ID" &>/dev/null; then
+  echo "  Secret ${SECRET_PREFIX}FIREBASE_CREDENTIALS_JSON も読み込みます..."
+  SECRETS_SET="${SECRETS_SET},FIREBASE_CREDENTIALS_JSON=${SECRET_PREFIX}FIREBASE_CREDENTIALS_JSON:latest"
+fi
 
 gcloud run deploy "$SERVICE_NAME" \
   --project="$PROJECT_ID" \

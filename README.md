@@ -81,11 +81,23 @@
 
 ---
 
-## 🔒 永続化（環境変数形式）
+---
 
-`!auto_translate env_export` で出力された設定を `.env` や GCP Secret Manager / Fly.io Secrets に設定することで、再起動後も永久に設定が保持されます。
+## 🔒 設定の永続化
 
-### 設定フォーマット (`AUTO_TRANSLATE_PAIRS`)
+### 1. 🔥 Firebase (Cloud Firestore) による全自動永続化（推奨）
+Discord 上でコマンド（`!at add_mode`, `!at remove`, `/emoji add` 等）を実行した瞬間に、**Firebase Firestore にリアルタイムで自動保存**され、Bot 起動時に自動復元されます。ターミナルでの設定反映作業が一切不要になります。
+
+- **保存単位**: Bot の Discord ID ごとにドキュメント（コレクション: `bot_configs`）を自動作成して保存するため、複数サーバーや複数 Bot（Cloud Run と Fly.io 等）で同じ Firebase プロジェクトを共有しても設定が混ざりません。
+- **環境変数の設定**:
+  - `FIREBASE_PROJECT_ID`: Firebase / GCP プロジェクトID
+  - `FIREBASE_CREDENTIALS_JSON`: （Fly.io や別プロジェクトの場合）Firebase サービスアカウント秘密鍵の JSON 文字列
+    ※ Cloud Run で同一 GCP プロジェクト内の Firestore を利用する場合は、キー不要（自動認証）で `FIREBASE_PROJECT_ID` だけで接続可能です。
+
+### 2. 環境変数形式による永続化（フォールバック）
+Firebase 未設定時は、従来通り `!auto_translate env_export` で出力された設定を `.env` や GCP Secret Manager / Fly.io Secrets に設定することで設定を保持できます。
+
+#### 設定フォーマット (`AUTO_TRANSLATE_PAIRS`)
 `SOURCE_ID:TARGET_ID:LANG_CODE:MODE:EMOJI:TARGET_USERS:SOURCE_LANG_LIMIT`
 
 ```env

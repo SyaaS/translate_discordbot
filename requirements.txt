@@ -4,3 +4,4 @@ deepl>=1.18.0
 requests>=2.32.0
 langdetect>=1.0.9
 aiohttp>=3.9.0
+google-cloud-firestore>=2.14.0

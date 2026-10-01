@@ -5,6 +5,7 @@ guild_emoji_config.json にギルドごとのカスタムマッピングと
 デフォルト国旗の有効/無効設定を保存する。
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.flag_map import FLAG_TO_LANG, LETTER_TO_LANG
+from utils.firestore_manager import firestore_manager
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,36 @@ LANGUAGE_PRESETS: dict[str, dict[str, Any]] = {
 # ── 内部データ ──────────────────────────────────────────────────────────────
 
 _config: dict[str, Any] | None = None  # メモリ上のキャッシュ
+_current_bot_id: str | None = None
+
+
+def set_current_bot_id(bot_id: str | int) -> None:
+    """現在動作中の Bot ID を登録する"""
+    global _current_bot_id
+    _current_bot_id = str(bot_id)
+
+
+def sync_from_firestore(bot_id: str | int) -> None:
+    """Firestore から絵文字設定を読み込み、メモリおよびローカルファイルを同期する"""
+    global _config, _current_bot_id
+    _current_bot_id = str(bot_id)
+    if not firestore_manager.is_enabled():
+        return
+
+    data = firestore_manager.load_guild_emoji_config(bot_id)
+    if data and isinstance(data, dict):
+        _config = data
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(_config, f, ensure_ascii=False, indent=2)
+            logger.info("Firestore から Bot (%s) の絵文字設定を復元しました", bot_id)
+        except OSError as e:
+            logger.error("ローカル絵文字設定の保存に失敗: %s", e)
+    else:
+        # 初回など空の場合、現在のローカル設定を保存
+        cfg = _ensure_loaded()
+        firestore_manager.save_guild_emoji_config(bot_id, cfg)
+        logger.info("Firestore に Bot (%s) の絵文字初期設定を保存しました", bot_id)
 
 
 def _default_guild_config() -> dict[str, Any]:
@@ -100,8 +132,8 @@ def load_config() -> dict[str, Any]:
 
 
 def save_config() -> None:
-    """現在のメモリ上の設定をファイルに書き出す。"""
-    global _config
+    """現在のメモリ上の設定をファイルおよび Firestore に書き出す。"""
+    global _config, _current_bot_id
     if _config is None:
         return
     try:
@@ -110,6 +142,15 @@ def save_config() -> None:
         logger.info("設定ファイルを保存しました: %s", CONFIG_PATH)
     except OSError as e:
         logger.error("設定ファイルの保存に失敗: %s", e)
+
+    if _current_bot_id and firestore_manager.is_enabled():
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                firestore_manager.async_save_guild_emoji_config(_current_bot_id, _config)
+            )
+        except RuntimeError:
+            firestore_manager.save_guild_emoji_config(_current_bot_id, _config)
 
 
 def _ensure_loaded() -> dict[str, Any]:

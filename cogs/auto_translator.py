@@ -15,6 +15,7 @@ import discord
 from discord.ext import commands
 
 from utils.flag_map import get_lang_info_by_code
+from utils.firestore_manager import firestore_manager
 from utils.translator import detect_language, translate
 
 logger = logging.getLogger(__name__)
@@ -215,15 +216,65 @@ class AutoTranslatorCog(commands.Cog):
 
         return data
 
-    def _save_configs(self) -> None:
-        """現在の設定構造をファイルに保存する。"""
+    def _save_local_file(self) -> None:
+        """現在の設定構造をローカルファイルに保存する。"""
         try:
             os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(self.configs, f, indent=2, ensure_ascii=False)
-            logger.info("自動翻訳設定を保存しました")
+            logger.info("自動翻訳設定をローカルファイルに保存しました")
         except Exception as e:
             logger.error("設定ファイルの保存に失敗しました: %s", e)
+
+    def _save_configs(self) -> None:
+        """現在の設定構造をローカルファイルおよび Firestore に保存する。"""
+        self._save_local_file()
+
+        if firestore_manager.is_enabled() and self.bot.user:
+            bot_id = str(self.bot.user.id)
+            channels = self.configs.get("channels", {})
+            users = self.configs.get("trigger_users", [])
+            emojis = self.configs.get("trigger_emojis", ["🌐"])
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(
+                    firestore_manager.async_save_auto_translator_data(
+                        bot_id, channels, users, emojis
+                    )
+                )
+            except RuntimeError:
+                firestore_manager.save_auto_translator_data(
+                    bot_id, channels, users, emojis
+                )
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """ボット起動時に Firestore から最新の自動翻訳設定を復元・同期する"""
+        if not firestore_manager.is_enabled() or not self.bot.user:
+            return
+
+        bot_id = str(self.bot.user.id)
+        firestore_data = await asyncio.to_thread(
+            firestore_manager.load_auto_translator_data, bot_id
+        )
+        if firestore_data:
+            if "channels" in firestore_data and isinstance(firestore_data["channels"], dict):
+                self.configs["channels"] = firestore_data["channels"]
+            if "trigger_users" in firestore_data and isinstance(firestore_data["trigger_users"], list):
+                self.configs["trigger_users"] = firestore_data["trigger_users"]
+            if "trigger_emojis" in firestore_data and isinstance(firestore_data["trigger_emojis"], list):
+                self.configs["trigger_emojis"] = firestore_data["trigger_emojis"]
+            self._save_local_file()
+            logger.info("Firestore から Bot (%s) の自動翻訳設定を復元しました", bot_id)
+        else:
+            # Firestore にまだ設定がない場合、現在の初期設定を保存
+            await firestore_manager.async_save_auto_translator_data(
+                bot_id,
+                self.configs.get("channels", {}),
+                self.configs.get("trigger_users", []),
+                self.configs.get("trigger_emojis", ["🌐"]),
+            )
+            logger.info("Firestore に Bot (%s) の初期設定を自動保存しました", bot_id)
 
     async def _get_already_translated_source_ids(
         self,
