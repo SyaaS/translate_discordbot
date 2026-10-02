@@ -89,5 +89,33 @@ class TestTextFilter(unittest.TestCase):
         self.assertTrue(is_translatable_text("<@123456> 今日の進捗はどうですか？")[0])
 
 
+class TestDetectLanguage(unittest.TestCase):
+    def test_detect_language(self):
+        from utils.translator import detect_language
+
+        # 日本語（ひらがな・カタカナを含む）
+        self.assertEqual(detect_language("武器強いw"), "ja")
+        self.assertEqual(detect_language("了解です"), "ja")
+        self.assertEqual(detect_language("ヴァルハラはスキル書足りない"), "ja")
+
+        # 漢字のみの日本語相槌・報告
+        self.assertEqual(detect_language("了解"), "ja")
+        self.assertEqual(detect_language("確認"), "ja")
+        self.assertEqual(detect_language("完了"), "ja")
+        self.assertEqual(detect_language("乾杯"), "ja")
+
+        # 韓国語（ハングルを含む）
+        self.assertEqual(detect_language("안녕하세요"), "ko")
+        self.assertEqual(detect_language("감사합니다"), "ko")
+
+        # 中国語（中国語特有文字・語彙を含む）
+        self.assertEqual(detect_language("你好"), "zh-cn")
+        self.assertEqual(detect_language("谢谢"), "zh-cn")
+        self.assertEqual(detect_language("这是什么"), "zh-cn")
+
+        # 英語
+        self.assertEqual(detect_language("Hello everyone, how are you?"), "en")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 
 import os
+import re
 
 import requests
 
@@ -52,18 +53,70 @@ def translate_deepl(text: str, target_lang: str) -> str | None:
 
 # ── MyMemory ───────────────────────────────────────────────────────────────
 
+# 言語判定用の正規表現パターン
+HANGUL_RE = re.compile(r"[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]")
+KANA_RE = re.compile(r"[\u3040-\u309F\u30A0-\u30FF]")
+KANJI_RE = re.compile(r"[\u4E00-\u9FFF]")
+
+# 簡体字・繁体字および中国語特有の機能語・代名詞・表記
+CHINESE_SPECIFIC_CHARS = set(
+    "你您们么吗吧呢这那谁什没很还说话请问谢欢"
+    "点让着跟比别快要真太买卖做吃喝读写东西"
+    "个为对样现动经长关门题进节车气东"
+    "汉语简体中文中国网电脑软件见岁"
+)
+
+
 def detect_language(text: str) -> str:
     """
-    テキストのソース言語を検出する（langdetect 使用・オフライン・無料）。
-    URL、絵文字、メンション等を除去したプレーンテキストで言語検出を行う。
-    検出失敗時や言語テキストが含まれない場合は "en" をデフォルトとして返す。
+    テキストのソース言語を検出する。
+    1. ハングルが含まれていれば韓国語 ("ko") と確定。
+    2. ひらがな・カタカナが1文字でも含まれていれば日本語 ("ja") と確定。
+    3. 漢字が含まれている場合、中国語特有文字の有無や長さ・langdetect結果から "zh-cn" または "ja" を判定。
+    4. それ以外（英字・キリル等）は langdetect で検出。
     """
     try:
         from utils.text_filter import clean_text_for_classification
         cleaned = clean_text_for_classification(text)
+        if not cleaned:
+            cleaned = text.strip() if text else ""
+        if not cleaned:
+            return "en"
+
+        # 1. ハングル（韓国語確定）
+        if HANGUL_RE.search(cleaned):
+            return "ko"
+
+        # 2. ひらがな・カタカナ（日本語確定）
+        if KANA_RE.search(cleaned):
+            return "ja"
+
+        # 3. 漢字が含まれている場合（かな・ハングルがない）
+        kanji_matches = KANJI_RE.findall(cleaned)
+        if kanji_matches:
+            # 中国語特有の文字・語彙が含まれている場合は中国語
+            if any(c in CHINESE_SPECIFIC_CHARS for c in kanji_matches):
+                return "zh-cn"
+
+            # 4文字以下の短い漢字単語（了解、完了、確認、感謝、乾杯など）は日本語環境での相槌・報告として日本語扱い
+            if len(kanji_matches) <= 4:
+                return "ja"
+
+            # 5文字以上の場合は langdetect による判定を試みる（ハングルはないため 'ko' は除外）
+            try:
+                from langdetect import detect_langs
+                langs = detect_langs(cleaned)
+                no_ko = [l for l in langs if l.lang != "ko"]
+                if no_ko and no_ko[0].lang in ("zh-cn", "zh-tw") and no_ko[0].prob > 0.8:
+                    return no_ko[0].lang
+            except Exception:
+                pass
+
+            return "ja"
+
+        # 4. 上記以外（英数字、キリル文字、タイ文字など）
         from langdetect import detect
-        lang = detect(cleaned if cleaned else text)
-        # langdetect は "zh-cn", "zh-tw" 等を返す場合がある
+        lang = detect(cleaned)
         return lang.lower()
     except Exception:
         return "en"
