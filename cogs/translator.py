@@ -90,9 +90,9 @@ class TranslatorCog(commands.Cog):
         logger.info("翻訳開始: emoji=%s lang=%s message_id=%s", emoji, lang_label, message.id)
         translated_text, engine = translate(content, deepl_lang, mymemory_lang)
 
-        # ソース言語とターゲット言語が同じ場合は何もしない
-        if engine == "same_language":
-            logger.info("同言語のため翻訳スキップ: lang=%s message_id=%s", lang_label, message.id)
+        # ソース言語とターゲット言語が同じ場合、または非言語テキストの場合は何もしない
+        if engine in ("same_language", "non_translatable"):
+            logger.info("翻訳不要のためスキップ: engine=%s, lang=%s, message_id=%s", engine, lang_label, message.id)
             return
 
         # --- スレッドの取得または作成 ---

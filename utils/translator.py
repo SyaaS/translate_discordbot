@@ -55,11 +55,14 @@ def translate_deepl(text: str, target_lang: str) -> str | None:
 def detect_language(text: str) -> str:
     """
     テキストのソース言語を検出する（langdetect 使用・オフライン・無料）。
-    検出失敗時は "en" をデフォルトとして返す。
+    URL、絵文字、メンション等を除去したプレーンテキストで言語検出を行う。
+    検出失敗時や言語テキストが含まれない場合は "en" をデフォルトとして返す。
     """
     try:
+        from utils.text_filter import clean_text_for_classification
+        cleaned = clean_text_for_classification(text)
         from langdetect import detect
-        lang = detect(text)
+        lang = detect(cleaned if cleaned else text)
         # langdetect は "zh-cn", "zh-tw" 等を返す場合がある
         return lang.lower()
     except Exception:
@@ -132,6 +135,13 @@ def translate(
     """
     if not text or not text.strip():
         return None, ""
+
+    # 自然言語テキストが含まれていない場合は翻訳不要
+    from utils.text_filter import is_translatable_text
+    translatable, reason = is_translatable_text(text)
+    if not translatable:
+        logger.info("非言語テキストのため翻訳スキップ (reason=%s): %s", reason, text[:50])
+        return None, "non_translatable"
 
     # 0. ソース言語を検出
     detected = _detect_language(text)

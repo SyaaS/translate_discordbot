@@ -16,6 +16,7 @@ from discord.ext import commands
 
 from utils.flag_map import get_lang_info_by_code
 from utils.firestore_manager import firestore_manager
+from utils.text_filter import clean_text_for_classification, is_translatable_text
 from utils.translator import detect_language, translate
 
 logger = logging.getLogger(__name__)
@@ -363,6 +364,15 @@ class AutoTranslatorCog(commands.Cog):
         source_channel_id = str(message.channel.id)
         channels_config = self.configs.get("channels", {})
         if source_channel_id not in channels_config:
+            return
+
+        # 非言語メッセージ（絵文字のみ、GIF URLのみ、スラングのみ等）は翻訳処理をスキップ
+        translatable, reason = is_translatable_text(message.content)
+        if not translatable:
+            logger.debug(
+                "非言語メッセージのため自動翻訳をスキップ: channel_id=%s, msg_id=%s, reason=%s",
+                source_channel_id, message.id, reason
+            )
             return
 
         # 1. mode == 'all' のペア (全自動・別チャンネル転送)
